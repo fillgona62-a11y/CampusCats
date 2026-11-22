@@ -1,0 +1,6 @@
+split,cat_id,date,photo,x,y,width,height
+gallery,A,2026-03-01,photos/A-front.jpg,0,0,1,1
+gallery,A,2026-03-02,photos/A-side.jpg,0,0,1,1
+gallery,B,2026-03-02,photos/B-front.jpg,0,0,1,1
+test,A,2026-03-15,photos/A-another-day.jpg,0,0,1,1
+test,C,2026-03-16,photos/C-new.jpg,0,0,1,1

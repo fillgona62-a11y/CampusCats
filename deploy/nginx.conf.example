@@ -1,0 +1,47 @@
+# Install inside nginx's http context. Replace the domain, certificate paths and private IP.
+upstream campus_api {
+    server 10.20.0.4:8765;
+    keepalive 16;
+}
+server {
+    listen 80;
+    server_name cats.school.example;
+    return 308 https://cats.school.example$request_uri;
+}
+server {
+    listen 443 ssl;
+    server_name cats.school.example;
+    ssl_certificate /etc/letsencrypt/live/cats.school.example/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/cats.school.example/privkey.pem;
+    root /srv/campuscats/web;
+    index index.html;
+    client_max_body_size 9m;
+    add_header X-Content-Type-Options nosniff always;
+    add_header Referrer-Policy same-origin always;
+    gzip on;
+    gzip_types text/css application/javascript application/json text/javascript;
+    location / {
+        try_files $uri $uri/ =404;
+    }
+    location = /manifest.webmanifest {
+        default_type application/manifest+json;
+    }
+    location ~ ^/(api|media)/ {
+        proxy_pass http://campus_api;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_read_timeout 90s;
+    }
+    # Only an authorized response from the application can select a file here.
+    location /_campus_media/ {
+        internal;
+        alias /srv/campuscats-media/;
+        types { image/jpeg jpg; }
+        add_header Cache-Control "private, no-store" always;
+        add_header X-Content-Type-Options nosniff always;
+    }
+}

@@ -1,0 +1,20 @@
+[Unit]
+Description=Campus Cats pilot API
+After=network-online.target
+Wants=network-online.target
+RequiresMountsFor=/srv/campuscats-media
+
+[Service]
+User=campuscats
+Group=campuscats
+WorkingDirectory=/srv/campuscats
+StateDirectory=campuscats
+EnvironmentFile=/etc/campuscats.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/srv/campuscats/.venv/bin/gunicorn --chdir server --workers 2 --threads 4 --timeout 90 --bind ${CAMPUS_BIND} app:create_app()
+Restart=on-failure
+NoNewPrivileges=yes
+UMask=0027
+
+[Install]
+WantedBy=multi-user.target

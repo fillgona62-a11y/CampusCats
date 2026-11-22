@@ -1,0 +1,99 @@
+PRAGMA journal_mode=WAL;
+PRAGMA foreign_keys=ON;
+
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY,
+    email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    nickname TEXT NOT NULL,
+    salt BLOB NOT NULL,
+    password_hash BLOB NOT NULL,
+    recovery_hash TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'member' CHECK(role IN ('member','reviewer'))
+);
+CREATE TABLE IF NOT EXISTS sessions (
+    token TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users,
+    expires INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS throttle (
+    bucket TEXT PRIMARY KEY,
+    expires INTEGER NOT NULL,
+    hits INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS cats (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    coat TEXT NOT NULL DEFAULT '',
+    breed TEXT NOT NULL DEFAULT '',
+    evidence TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS frames (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users,
+    request_id TEXT NOT NULL,
+    request_hash TEXT NOT NULL,
+    image TEXT UNIQUE NOT NULL,
+    area TEXT NOT NULL,
+    note TEXT NOT NULL,
+    observed_at TEXT NOT NULL,
+    UNIQUE(user_id,request_id)
+);
+CREATE TABLE IF NOT EXISTS sightings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    frame_id INTEGER NOT NULL REFERENCES frames,
+    box TEXT NOT NULL,
+    crop TEXT NOT NULL,
+    analysis TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','confirmed','rejected')),
+    suggested_cat_id INTEGER REFERENCES cats,
+    cat_id INTEGER REFERENCES cats,
+    CHECK((status='confirmed')=(cat_id IS NOT NULL)),
+    UNIQUE(frame_id,cat_id)
+);
+CREATE INDEX IF NOT EXISTS sightings_by_cat ON sightings(cat_id);
+CREATE INDEX IF NOT EXISTS sightings_by_status ON sightings(status);
+CREATE INDEX IF NOT EXISTS frames_by_owner ON frames(user_id,observed_at);
+CREATE TABLE IF NOT EXISTS thumbnails (
+    sighting_id INTEGER PRIMARY KEY REFERENCES sightings(id) ON DELETE CASCADE,
+    image TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS auto_identity (
+    sighting_id INTEGER PRIMARY KEY REFERENCES sightings(id) ON DELETE CASCADE,
+    first_reference INTEGER NOT NULL REFERENCES sightings(id) ON DELETE CASCADE,
+    second_reference INTEGER NOT NULL REFERENCES sightings(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS auto_identity_first ON auto_identity(first_reference);
+CREATE INDEX IF NOT EXISTS auto_identity_second ON auto_identity(second_reference);
+CREATE TRIGGER IF NOT EXISTS recheck_auto_identity_on_reference_change
+BEFORE UPDATE OF status, cat_id ON sightings
+WHEN OLD.status='confirmed' AND (NEW.status!='confirmed' OR NEW.cat_id IS NOT OLD.cat_id)
+BEGIN
+    UPDATE sightings SET status='pending', cat_id=NULL
+    WHERE id IN (SELECT sighting_id FROM auto_identity WHERE first_reference=OLD.id OR second_reference=OLD.id);
+    DELETE FROM auto_identity WHERE first_reference=OLD.id OR second_reference=OLD.id;
+END;
+CREATE TRIGGER IF NOT EXISTS recheck_auto_identity_on_reference_delete
+BEFORE DELETE ON sightings
+WHEN OLD.status='confirmed'
+BEGIN
+    UPDATE sightings SET status='pending', cat_id=NULL
+    WHERE id IN (SELECT sighting_id FROM auto_identity WHERE first_reference=OLD.id OR second_reference=OLD.id);
+END;
+CREATE TABLE IF NOT EXISTS aliases (
+    id INTEGER PRIMARY KEY,
+    cat_id INTEGER NOT NULL REFERENCES cats,
+    name TEXT NOT NULL COLLATE NOCASE,
+    submitter INTEGER NOT NULL REFERENCES users,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','approved','rejected')),
+    UNIQUE(cat_id,name)
+);
+CREATE TABLE IF NOT EXISTS audit (
+    id INTEGER PRIMARY KEY,
+    actor INTEGER NOT NULL REFERENCES users,
+    kind TEXT NOT NULL,
+    target INTEGER NOT NULL,
+    before_state TEXT NOT NULL,
+    after_state TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);

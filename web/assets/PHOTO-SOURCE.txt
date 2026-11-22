@@ -1,0 +1,5 @@
+The cover photograph is a resized copy of cat.jpg from the OpenCV sample
+samples/dnn/dnn_model_runner/dnn_conversion/paddlepaddle/data/cat.jpg
+https://github.com/opencv/opencv/tree/4.12.0/samples/dnn/dnn_model_runner/dnn_conversion/paddlepaddle
+This is an illustrative sample photo. It is not registered in the pilot database.
+See OpenCV-LICENSE.txt for the upstream repository license.
