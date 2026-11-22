@@ -317,6 +317,43 @@ def review_breed(db, actor, cat_id, body):
     return {"ok": True}
 
 
+def personal_album(db, uid):
+    # Keep the most recent personal photo in each area, even after a cat changes areas.
+    rows = db.execute("""
+        WITH visits AS (
+            SELECT s.cat_id,s.id,f.id AS frame_id,f.area,f.observed_at,
+                   COUNT(*) OVER place AS encounters, MIN(f.observed_at) OVER place AS first_at,
+                   ROW_NUMBER() OVER (place ORDER BY f.observed_at DESC,s.id DESC) AS priority
+            FROM frames f JOIN sightings s ON s.frame_id=f.id
+            WHERE f.user_id=? AND s.status='confirmed'
+            WINDOW place AS (PARTITION BY s.cat_id,f.area)
+        )
+        SELECT v.cat_id,c.name,v.area,v.encounters,v.first_at,v.observed_at AS last_at,
+               v.id AS sighting_id,v.frame_id
+        FROM visits v JOIN cats c ON c.id=v.cat_id WHERE v.priority=1
+        ORDER BY v.observed_at DESC,v.id DESC
+    """, (uid,))
+    return {"visits": [dict(row) for row in rows],
+            "campus_total": db.execute("SELECT COUNT(DISTINCT cat_id) FROM sightings WHERE cat_id IS NOT NULL").fetchone()[0],
+            "pending": db.execute("SELECT COUNT(*) FROM frames f JOIN sightings s ON s.frame_id=f.id "
+                                  "WHERE f.user_id=? AND s.status='pending'", (uid,)).fetchone()[0]}
+
+
+def encounter_receipt(db, uid, frame_id):
+    frame = one(db, "SELECT area,observed_at FROM frames WHERE id=? AND user_id=?", frame_id, uid)
+    rows = db.execute("""
+        SELECT s.id,s.status,s.cat_id,c.name AS cat_name,a.sighting_id IS NOT NULL AS automatic,
+               CASE WHEN s.cat_id IS NOT NULL THEN (
+                   SELECT COUNT(*) FROM sightings p JOIN frames f ON f.id=p.frame_id
+                   WHERE p.cat_id=s.cat_id AND f.user_id=? AND (f.observed_at,p.id)<=(?,s.id)
+               ) END AS encounter_number
+        FROM sightings s LEFT JOIN cats c ON c.id=s.cat_id
+        LEFT JOIN auto_identity a ON a.sighting_id=s.id
+        WHERE s.frame_id=? ORDER BY s.id
+    """, (uid, frame["observed_at"], frame_id))
+    return dict(frame, sightings=[dict(row) for row in rows])
+
+
 def reunions(db, uid):
     rows = db.execute("""
         SELECT s.id,s.cat_id,c.name,f.observed_at

@@ -1,12 +1,13 @@
 import { api, back, btn, busy, card, date, empty, esc, formValues, head, icon, img, notice, status } from './ui.js';
 import { capturePage } from './capture.js';
+import { albumPage, encounterPage } from './album.js';
 import { reviewPage, bindBreed } from './review.js';
 const main = document.getElementById('content');
 let serial = 0, clean = null, session = null, recoveryCode = '', lastFilter = '', filterArea = '';
 const navItems = [['home', '首页', 'home'], ['atlas', '猫猫图鉴', 'book'], ['capture', '记录目击', 'camera'], ['me', '我的手记', 'user']];
 function chrome(route) {
     let active = route === 'cat' ? 'atlas' : route;
-    if (['login', 'register', 'recover'].includes(route))
+    if (['login', 'register', 'recover', 'album', 'encounter'].includes(route))
         active = 'me';
     const items = [...navItems];
     if (session?.role === 'reviewer')
@@ -19,7 +20,7 @@ function chrome(route) {
 }
 function home(data) {
     const stats = data.stats;
-    main.innerHTML = `<section class="hero"><div class="hero-copy"><h1>校园猫图鉴</h1><p>拍下校园里的猫，用花纹认出老朋友，记下每一次相遇。</p>${btn('#capture', '记录一次目击', 'camera', 'lime')}</div>
+    main.innerHTML = `<section class="hero"><div class="hero-copy"><h1>校园猫图鉴</h1><p>拍下校园里的猫，用花纹认出老朋友，记下每一次相遇。</p><div class="actions">${btn('#capture', '记录一次目击', 'camera', 'lime')}<a class="hero-album" href="#album">${icon('book')} 我的猫册</a></div></div>
     <figure class="hero-photo">${img('/assets/field-cat.jpg', '校园猫图鉴封面摄影', 'fetchpriority="high"')}<figcaption>封面摄影</figcaption></figure></section>
     <section class="stats" aria-label="校园猫数量统计">${[['cat', stats.cats, '只', '累计已建档'], ['time', stats.active, '只', '近 30 天有目击'], ['focus', stats.pending, '条', '待辨认记录']].map(([symbol, n, unit, label]) => `<div class="stat">${icon(symbol)}<div><strong>${Number(n)}<i>${unit}</i></strong><span>${label}</span></div></div>`).join('')}</section>
     <div class="section-head"><h2>最近目击的猫</h2><a href="#atlas">查看图鉴 ${icon('arrow')}</a></div>
@@ -54,7 +55,7 @@ function atlas(cats) {
 }
 function entry(s) {
     const badge = s.identity_source === 'automatic' ? '<span class="pill confirmed">已自动归档</span>' : status(s.status);
-    return `<article class="entry">${img(s.photo_url, '目击照片', 'loading="lazy"')}<div><h3>${s.cat_id ? `<a href="#cat/${Number(s.cat_id)}">${esc(s.cat_name || '已建档的猫')}</a>` : '目击记录 #' + Number(s.id)}</h3><p>${esc(s.area)} · ${esc(date(s.observed_at))}</p>${badge}${s.note ? `<p>${esc(s.note)}</p>` : ''}</div></article>`;
+    return `<article class="entry">${img('/media/thumb/' + Number(s.id) + '.jpg', '目击照片', 'loading="lazy"')}<div><h3>${s.cat_id ? `<a href="#cat/${Number(s.cat_id)}">${esc(s.cat_name || '已建档的猫')}</a>` : '目击记录 #' + Number(s.id)}</h3><p>${esc(s.area)} · ${esc(date(s.observed_at))}</p>${badge}${s.note ? `<p>${esc(s.note)}</p>` : ''}</div>${s.frame_id ? `<a class="link" href="#encounter/${Number(s.frame_id)}">查看这次相遇</a>` : ''}</article>`;
 }
 function catPage({ cat, sightings }) {
     const reviewer = session?.role === 'reviewer';
@@ -89,7 +90,7 @@ function catPage({ cat, sightings }) {
     });
 }
 function auth(mode, requested = 'me') {
-    const target = /^(home|atlas|capture|me|review|cat\/\d+)$/.test(requested) ? requested : 'me';
+    const target = /^(home|atlas|capture|me|review|album|cat\/\d{1,18}|encounter\/\d{1,18}(?:\/\d{1,18})?)$/.test(requested) ? requested : 'me';
     const create = mode === 'register', recover = mode === 'recover';
     const title = recover ? '找回密码' : create ? '创建观察账号' : '登录猫迹';
     main.innerHTML = `<div class="tiny">${back('#home', '返回首页')}${head(title, create ? '注册后可以提交目击，收集自己的重遇卡片。' : '')}<form class="surface" id="auth">${recover ? '' : `<div class="seg"><a class="${!create ? 'active' : ''}" href="#login/${target}">登录</a><a class="${create ? 'active' : ''}" href="#register/${target}">注册</a></div>`}
@@ -159,6 +160,7 @@ function me(data) {
     const { user, sightings, reunions } = data;
     main.innerHTML = `<div class="narrow">${head('我的手记', `${user.nickname} · ${user.email}`, `<button class="btn light" id="logout">退出登录</button>`)}
  ${user.role === 'reviewer' ? btn('#review', '进入维护工作台', 'review', 'light') : ''}
+ <a class="album-shortcut" href="#album">${icon('book')}<div><strong>我的猫册</strong><small>按校园区域翻看你遇见的猫</small></div>${icon('arrow')}</a>
  <div class="section-head"><h2>重遇卡片</h2></div>${reunions.length ? reunions.map((r, i) => `<article class="recap"><h2>${esc(r.cat_name)} <span>相隔 ${Number(r.days)} 天</span></h2><div class="compare">${[[r.first_photo_url, r.first_at, '初次目击'], [r.last_photo_url, r.last_at, '最近目击']].map(([url, when, title]) => `<figure>${img(url, title, 'loading="lazy"')}<figcaption>${title} · ${esc(date(when))}</figcaption></figure>`).join('')}</div><button type="button" class="btn light" data-export="${i}">生成可保存卡片</button><div class="export-result"></div></article>`).join('') : empty('time', '下一次相遇，会留下对照', '再次记录同一只猫并确认身份后，就能在这里看到两次目击的照片。')}
  <div class="section-head"><h2>我的目击</h2><span>${sightings.length} 条</span></div><div class="stack">${sightings.length ? sightings.map(entry).join('') : empty('camera', '还没有目击记录', '在校园偶遇一只猫时，拍下一张照片。', btn('#capture', '记录目击', 'camera'))}</div>
  <details class="surface"><summary>账号管理</summary><form id="delete-account"><p>注销后将撤回你的目击、照片及由此产生的公开记录。请确认需要注销，再输入当前密码。</p><label class="field"><span>当前密码</span><input name="password" type="password" required autocomplete="current-password"></label><p class="form-error"></p><button class="btn light" type="submit">确认注销账号</button></form></details></div>`;
@@ -207,21 +209,27 @@ async function route() {
             auth(page, parts.slice(1).join('/') || 'me');
             return;
         }
-        if (['capture', 'me', 'review'].includes(page) && !session) {
-            auth('login', page);
+        if (['capture', 'me', 'review', 'album', 'encounter'].includes(page) && !session) {
+            auth('login', parts.join('/'));
             return;
         }
         if (page === 'me') {
             me(personal);
             return;
         }
+        if (page === 'album') {
+            const data = await api('/me/album');
+            if (version === serial) albumPage(main, data);
+            return;
+        }
+        if (page === 'encounter' && /^\d{1,18}$/.test(id)) {
+            const data = await api('/me/frames/' + id);
+            if (version === serial) encounterPage(main, data, parts[2]);
+            return;
+        }
         if (page === 'capture') {
             clean = capturePage(main, reply => {
-                const automatic = reply.sightings.filter(s => s.identity_source === 'automatic').length;
-                const pending = reply.sightings.filter(s => s.status === 'pending').length;
-                const summary = [automatic && `${automatic} 条已自动归档`, pending && `${pending} 条待辨认`].filter(Boolean);
-                notice(summary.length ? `${summary.join('，')}。可在手记查看。` : '提交成功，可在手记查看。');
-                location.hash = 'me';
+                location.hash = 'encounter/' + reply.sightings[0].frame_id;
             });
             return;
         }

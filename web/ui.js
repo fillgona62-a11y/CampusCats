@@ -38,7 +38,7 @@ export function date(value) {
     if (!value)
         return '日期待补';
     const d = new Date(value);
-    return Number.isNaN(d.valueOf()) ? '日期待补' : d.toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' });
+    return Number.isNaN(d.valueOf()) ? '日期待补' : d.toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai', year: 'numeric', month: 'long', day: 'numeric' });
 }
 export function status(value) {
     return `<span class="pill ${esc(value)}">${({ pending: '待辨认', confirmed: '身份已确认', rejected: '未采纳' })[value] || '待处理'}</span>`;

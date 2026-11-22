@@ -143,6 +143,42 @@ class CatalogFlow(unittest.TestCase):
             self.call(thumb)
             self.app=active_app
 
+    def test_personal_album_and_receipt_follow_review_changes(self):
+        album = "/api/me/album"
+        self.call(album, expected=401)
+        self.assertEqual(self.call(album, cookie=self.member)[0], {"visits":[], "campus_total":0, "pending":0})
+        def submit(n, area, days, boxes=None):
+            payload = dict(self.submit(self.photo(n), str(n), boxes, days), area=area)
+            return self.call("/api/sightings", payload, self.member)[0]["sightings"]
+
+        first, second = submit(0, "图书馆", 3, [[0,0,.5,1],[.5,0,.5,1]])
+        receipt = "/api/me/frames/" + str(first["frame_id"])
+        self.call(receipt, expected=401)
+        self.call(receipt, cookie=self.reviewer, expected=404)
+        self.assertEqual(self.call(album, cookie=self.member)[0]["pending"], 2)
+        cid = self.call(f"/api/review/{first['id']}", {"action":"new","name":"小橘","reason":"人工复核"},
+                        self.reviewer)[0]["cat_id"]
+        view = lambda: self.call(receipt, cookie=self.member)[0]["sightings"]
+        self.assertEqual([(s["status"],s["encounter_number"]) for s in view()], [("confirmed",1),("pending",None)])
+        latest = submit(1, "食堂", 0)[0]
+        middle = submit(2, "图书馆", 2)[0]
+        match = {"action":"match","cat_id":cid,"reason":"人工复核"}
+        for item in (latest,middle):
+            self.call(f"/api/review/{item['id']}", match, self.reviewer)
+        current = self.call(album, cookie=self.member)[0]
+        self.assertEqual((current["campus_total"], current["pending"]), (1,1))
+        self.assertEqual([(v["area"],v["encounters"],v["sighting_id"],v["first_at"]) for v in current["visits"]],
+                         [("食堂",1,latest["id"],latest["observed_at"]),("图书馆",2,middle["id"],first["observed_at"])])
+        self.assertEqual(self.call(album, cookie=self.reviewer)[0], {"visits":[],"campus_total":1,"pending":0})
+        latest_path = "/api/me/frames/" + str(latest["frame_id"])
+        self.assertEqual(self.call(latest_path, cookie=self.member)[0]["sightings"][0]["encounter_number"], 3)
+        self.call(f"/api/review/{first['id']}", {"action":"reopen","reason":"重新核对"}, self.reviewer)
+        self.assertIsNone(view()[0]["encounter_number"])
+        self.assertEqual(self.call(latest_path, cookie=self.member)[0]["sightings"][0]["encounter_number"], 2)
+        self.call(f"/api/review/{second['id']}", {"action":"reject","reason":"无有效特征"}, self.reviewer)
+        self.assertEqual(self.call(album, cookie=self.member)[0]["pending"], 1)
+        self.assertEqual(view()[1]["status"], "rejected")
+
     def test_sessions_recover_and_validation(self):
         credentials = {"email":"lost@example.edu","password":"first-password","nickname":"小林"}
         registered,headers = self.call("/api/register",credentials)

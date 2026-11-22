@@ -16,7 +16,7 @@ from urllib.parse import urlsplit
 from wsgiref.simple_server import WSGIServer, make_server
 
 import accounts
-from catalog import (SIGHTING_QUERY, audit, catalog, connect, field, identify, integer, one,
+from catalog import (SIGHTING_QUERY, audit, catalog, connect, encounter_receipt, field, identify, integer, one, personal_album,
                      reunions, review_breed, review_identity, revision, serialize, similar_pending, stats, upload)
 from media import Problem
 
@@ -186,6 +186,11 @@ class App:
         if path == "/api/home":
             cats = catalog(db)
             return {"stats":stats(db,cats),"cats":list(cats.values())}
+        if path == "/api/me/album":
+            return personal_album(db, require(user))
+        receipt = re.fullmatch(r"/api/me/frames/(\d{1,18})", path)
+        if receipt:
+            return encounter_receipt(db, require(user), int(receipt[1]))
         if path == "/api/me":
             if not user:
                 return {"user":None,"sightings":[],"reunions":[]}
