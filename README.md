@@ -2,6 +2,14 @@
 
 猫迹帮同学记录在校园里遇到的猫。同一只猫可以有多个别名和多条目击记录，图鉴只计一只。游客可以浏览图鉴，注册后可以拍照、提交目击、补充别名和制作重遇卡片。
 
+## 手机下载与使用
+
+- **安卓手机**　下载联网测试版 APK，打开文件并按系统提示安装。首次启动「猫迹」会打开校园图鉴，服务地址已预设。[下载安卓 APK](downloads/CampusCats-Android.apk)
+- **iPhone**　用 Safari 打开猫迹，点「分享」→「添加到主屏幕」，以后就能从桌面图标进入。[打开校园猫图鉴](https://42.194.143.221/)
+- **iOS 工程下载**　目前提供 Xcode 工程 ZIP，尚无可直接安装的签名 IPA。要在真机上运行，请在 Mac 上解压，用 Xcode 打开 `CampusCats.xcodeproj`，在「Signing & Capabilities」选择自己的开发团队，选择已连接的 iPhone 后运行。首次打开时填入试点地址 `https://42.194.143.221`。[下载 iOS 工程 ZIP](downloads/CampusCats-iOS-Xcode.zip)
+
+从 GitHub 下载 APK 或 ZIP 时，请先登录有此私有仓库访问权限的账号。点上面的文件链接，再点文件页右上角的下载按钮（Download raw file）。网页版图鉴可直接访问。
+
 ## 本地启动
 
 需要 Python 3.10 或更新版本，以及 SQLite 3.35 或更新版本。在项目根目录创建并激活虚拟环境，再安装依赖并启动服务。
@@ -37,11 +45,8 @@ python -m pip install "opencv-python-headless>=4.11,<5"
 
 品种可以根据相似档案提供待核实线索，正式核验需要维护者登记来源。个体匹配的准确率和自动归档比例需要用本校跨日照片测量。[识别复测指南](evaluate/README.md)
 
-## 在手机上使用
+## 自行构建与部署
 
-部署后，用手机浏览器打开服务的 HTTPS 地址即可拍照和提交目击。iPhone 可以通过 Safari 将图鉴添加到主屏幕。
-
-- Android 安装包可用 `mobile/android/build-debug.ps1` 构建。脚本需要 Android SDK 和 JDK。指定 `-SchoolOrigin` 可以在包中预设学校的 HTTPS 服务地址。
-- iOS 工程位于 `mobile/ios/CampusCats.xcodeproj`。在 Mac 上用 Xcode 打开工程并配置 Apple 签名，即可构建和安装测试版。
+Android 安装包可用 `mobile/android/build-debug.ps1` 构建。脚本需要 Android SDK 和 JDK。指定 `-SchoolOrigin` 可以在包中预设学校的 HTTPS 服务地址。iOS 工程源码位于 `mobile/ios/`。
 
 单机与双机部署、数据备份和压测方法见[试点部署指南](deploy/README.md)。

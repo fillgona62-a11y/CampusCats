@@ -5,6 +5,7 @@ __pycache__/
 *.py[cod]
 *.sqlite*
 *.apk
+!/downloads/CampusCats-Android.apk
 *.ipa
 *.jks
 *.keystore
