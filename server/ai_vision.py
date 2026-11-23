@@ -181,6 +181,7 @@ def _call_vlm(crop, cfg):
         ],
     }
     if cfg.get("scope"):
+        payload.pop("temperature", None)
         raw = providers.completion(cfg, payload)
     else:
         raw = _environment_completion(cfg, payload)

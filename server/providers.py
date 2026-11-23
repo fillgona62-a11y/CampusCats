@@ -103,8 +103,9 @@ def effective(db, uid, folder):
         return None
     try:
         key = cipher(folder).decrypt(row["secret"]).decode()
-    except InvalidToken:
-        raise Problem("服务端无法解密已保存的 Agent 密钥。", 503) from None
+    except (InvalidToken, Problem):
+        # Gracefully fall back to local mode instead of breaking /api/identify with 503.
+        return None
     return dict(public(row), api_key=key, enabled=True, timeout=25, scope="personal" if row["owner"] else "shared")
 
 
@@ -143,8 +144,36 @@ def configure(db, owner, body, folder):
                 raise KeyError
         except (OSError, ValueError, TypeError, AttributeError, IndexError, KeyError) as error:
             detail = str(error) if isinstance(error, ValueError) and str(error).startswith("服务商返回 HTTP ") else "请核对 HTTPS 地址、模型名和服务商返回的格式。"
-            raise Problem("连接测试失败。" + detail, 422) from None
-        return {"ok":True, "model":model}
+            raise Problem("对话模型连接测试失败。" + detail, 422) from None
+        vision_tested = False
+        if vision:
+            import base64
+            import io
+            from PIL import Image
+            buf = io.BytesIO()
+            Image.new("RGB", (16, 16), "#d9822b").save(buf, format="JPEG", quality=80)
+            tiny_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+            v_payload = {
+                "model": vision,
+                "max_tokens": 32,
+                "messages": [{
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "请回复 OK。"},
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{tiny_b64}"}},
+                    ],
+                }],
+            }
+            try:
+                v_reply = completion({"base_url":url, "api_key":key, "timeout":15}, v_payload)
+                v_msg = v_reply["choices"][0]["message"]
+                if not v_msg.get("content"):
+                    raise KeyError
+                vision_tested = True
+            except (OSError, ValueError, TypeError, AttributeError, IndexError, KeyError) as error:
+                detail = str(error) if isinstance(error, ValueError) and str(error).startswith("服务商返回 HTTP ") else "请核对视觉模型名是否支持图片输入。"
+                raise Problem("对话模型已连通，但视觉模型测试失败。" + detail, 422) from None
+        return {"ok":True, "model":model, "vision_model":vision or None, "vision_tested":vision_tested}
     secret = cipher(folder, create=True).encrypt(key.encode())
     db.execute("""INSERT INTO agent_providers(owner,base_url,chat_model,vision_model,protocol,secret)
         VALUES(?,?,?,?,?,?) ON CONFLICT(owner) DO UPDATE SET base_url=excluded.base_url,

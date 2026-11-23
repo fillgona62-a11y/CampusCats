@@ -282,5 +282,79 @@ class UpgradeFeatureTests(unittest.TestCase):
         self.assertEqual(reply["cards"][0]["id"], cid)
 
 
+    def test_guest_identify_and_backup_restore_provider_safety(self):
+        from backup import backup
+        from zipfile import ZipFile
+
+        cid = self.seed_cat("校园小橘", "东区草坪", self.orange_cat_photo())
+        # Guest (no cookie) can call /api/identify directly without detouring through /api/agent/chat
+        guest_res, _ = self.call("/api/identify", {"photo": self.orange_cat_photo(1), "boxes": [[0, 0, 1, 1]]})
+        self.assertEqual(guest_res["results"][0]["record_status"]["top_cat_id"], cid)
+
+        # Save a shared provider, then back up and restore into a fresh directory without agent-key.fernet
+        self.call(
+            "/api/agent/settings",
+            {
+                "scope": "shared",
+                "action": "save",
+                "base_url": "https://api.example.com/v1",
+                "chat_model": "qwen-plus",
+                "vision_model": "qwen-vl-plus",
+                "protocol": "tools",
+                "api_key": "sk-secret-key",
+            },
+            self.reviewer,
+        )
+        with tempfile.TemporaryDirectory() as scratch:
+            dest = Path(scratch) / "snap.zip"
+            backup(self.app.data, self.app.media, dest)
+            restore_dir = Path(scratch) / "restore"
+            with ZipFile(dest) as zf:
+                zf.extractall(restore_dir)
+            restored = App(restore_dir, None)
+            prev = self.app
+            self.app = restored
+            try:
+                st, _ = self.call("/api/agent/status")
+                self.assertEqual(st["mode"], "local_fallback")
+                res, _ = self.call("/api/identify", {"photo": self.orange_cat_photo(1), "boxes": [[0, 0, 1, 1]]})
+                self.assertEqual(res["results"][0]["record_status"]["top_cat_id"], cid)
+            finally:
+                self.app = prev
+
+        # Corrupting agent-key.fernet must gracefully degrade instead of 503
+        (self.app.data / "agent-key.fernet").write_bytes(b"corrupted-key")
+        st_corrupt, _ = self.call("/api/agent/status")
+        self.assertEqual(st_corrupt["mode"], "local_fallback")
+
+    def test_provider_test_verifies_vision_model_and_omits_temperature(self):
+        captured = []
+
+        def fake_completion(cfg, payload):
+            captured.append(payload)
+            return {"choices": [{"message": {"content": "OK"}}]}
+
+        with mock.patch("providers.completion", side_effect=fake_completion):
+            res, _ = self.call(
+                "/api/agent/settings",
+                {
+                    "scope": "personal",
+                    "action": "test",
+                    "base_url": "https://api.example.com/v1",
+                    "chat_model": "o3-mini",
+                    "vision_model": "qwen-vl-plus",
+                    "protocol": "tools",
+                    "api_key": "sk-test-123",
+                },
+                self.member,
+            )
+        self.assertTrue(res["ok"])
+        self.assertTrue(res["vision_tested"])
+        self.assertEqual(len(captured), 2)
+        self.assertEqual(captured[0]["model"], "o3-mini")
+        self.assertEqual(captured[1]["model"], "qwen-vl-plus")
+        self.assertNotIn("temperature", captured[1])
+
+
 if __name__ == "__main__":
     unittest.main()

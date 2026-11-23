@@ -29,8 +29,9 @@ def backup(data, media, destination):
                     raise ValueError("Snapshot failed integrity check")
                 records = db.execute("SELECT image FROM frames UNION SELECT crop FROM sightings "
                                      "UNION SELECT image FROM thumbnails").fetchall()
-                # Restoring a backup should require everyone to sign in again.
+                # Restoring a backup should require everyone to sign in again and reconfigure encrypted API keys.
                 db.execute("DELETE FROM sessions")
+                db.execute("DELETE FROM agent_providers")
                 db.commit()
             with ZipFile(temp,"w") as archive:
                 archive.write(snapshot,"campus.sqlite3",compress_type=ZIP_DEFLATED)

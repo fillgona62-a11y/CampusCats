@@ -124,6 +124,14 @@ export function initAgentWidget() {
         fab.setAttribute('aria-expanded', 'false');
     };
     window.addEventListener('hashchange', () => toggle(false));
+    window.addEventListener('campuscats:ask-agent', e => {
+        const prompt = String(e.detail?.prompt || '').trim();
+        toggle(true);
+        if (prompt) {
+            input.value = prompt;
+            input.focus();
+        }
+    });
     fab.onclick = () => toggle(true);
     root.querySelector('#assistant-settings').onclick = () => toggle(false);
     root.querySelector('#agent-close').onclick = () => toggle(false);

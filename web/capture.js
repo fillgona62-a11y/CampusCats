@@ -156,7 +156,7 @@ export function capturePage(main, onSuccess, {saveLocal, draft, lookupOnly = fal
         suggestions = Array(data.results.length).fill(null);
         $('#results').innerHTML = `<hr class="divider"><h2>查图与识别结果</h2><p>${data.reference_count ? '已比对图鉴参考照，可查看每只猫的候选档案。' : '图鉴还没有可比对的参考照。提交目击后，维护者可以为第一只猫建档。'}</p>` + data.results.map((r, i) => {
             const cats = r.candidates || [], warnings = r.warnings || r.quality || [];
-            return `<section class="sheet"><h3>猫 ${i + 1}</h3>${recordBadge(r.record_status)}${aiProfileCard(r.ai_profile)}${r.breed_hint?.label ? `<p class="advice">图鉴相似档案的品种线索（待核实） · ${esc(r.breed_hint.label)}。至少两只相似候选的档案记有该品种，仍需核对这只猫的来源。</p>` : ''}<div class="compare"><figure>${img(cropData(frame, r.box), '本次取景')}<figcaption>本次取景</figcaption></figure>${cats[0] ? `<figure id="ref-${i}">${img(cats[0].photo_url, cats[0].name)}<figcaption>${refCaption(cats[0])}</figcaption></figure>` : ''}</div>${warnings.length ? `<p class="advice">${esc(warnings.join(' '))}</p>` : ''}${cats.length ? `<label class="field"><span>对照候选参考照</span><select data-ref="${i}">${cats.map((cat, j) => `<option value="${j}">${esc(cat.name)} · ${esc(cat.coat || '花色待补')}${typeof cat.similarity === 'number' ? `（约 ${Math.round(cat.similarity * 100)}%）` : ''}</option>`).join('')}</select></label><div class="actions" ${lookupOnly || saveLocal ? 'hidden' : ''}><button type="button" class="btn light" data-pick="${i}">建议匹配当前候选</button><button type="button" class="btn ghost" data-clear="${i}">暂时认不出</button></div>` : '<p class="hint">目前没有可用候选。</p>'}<p class="hint" id="selection-${i}" ${lookupOnly || saveLocal ? 'hidden' : ''}>提交意向 · 待辨认</p></section>`;
+            return `<section class="sheet"><h3>猫 ${i + 1}</h3>${recordBadge(r.record_status)}${aiProfileCard(r.ai_profile)}${r.breed_hint?.label ? `<p class="advice">图鉴相似档案的品种线索（待核实） · ${esc(r.breed_hint.label)}。至少两只相似候选的档案记有该品种，仍需核对这只猫的来源。</p>` : ''}<div class="compare"><figure>${img(cropData(frame, r.box), '本次取景')}<figcaption>本次取景</figcaption></figure>${cats[0] ? `<figure id="ref-${i}">${img(cats[0].photo_url, cats[0].name)}<figcaption>${refCaption(cats[0])}</figcaption></figure>` : ''}</div>${warnings.length ? `<p class="advice">${esc(warnings.join(' '))}</p>` : ''}${cats.length ? `<label class="field"><span>对照候选参考照</span><select data-ref="${i}">${cats.map((cat, j) => `<option value="${j}">${esc(cat.name)} · ${esc(cat.coat || '花色待补')}${typeof cat.similarity === 'number' ? `（约 ${Math.round(cat.similarity * 100)}%）` : ''}</option>`).join('')}</select></label><div class="actions" ${lookupOnly || saveLocal ? 'hidden' : ''}><button type="button" class="btn light" data-pick="${i}">建议匹配当前候选</button><button type="button" class="btn ghost" data-clear="${i}">暂时认不出</button></div>` : '<p class="hint">目前没有可用候选。</p>'}<div class="actions"><button type="button" class="btn ghost" data-ask-agent="${i}">问问猫猫助手</button></div><p class="hint" id="selection-${i}" ${lookupOnly || saveLocal ? 'hidden' : ''}>提交意向 · 待辨认</p></section>`;
         }).join('');
         $('#results').querySelectorAll('[data-ref]').forEach(select => select.onchange = () => {
             const index = Number(select.dataset.ref), cat = data.results[index].candidates[Number(select.value)];
@@ -178,6 +178,16 @@ export function capturePage(main, onSuccess, {saveLocal, draft, lookupOnly = fal
             requestId = newRequestId();
             $(`#selection-${i}`).textContent = '提交意向 · 待辨认';
         });
+        $('#results').querySelectorAll('[data-ask-agent]').forEach(b => b.onclick = () => {
+            const i = Number(b.dataset.askAgent), r = data.results[i];
+            const top = r.candidates?.[0];
+            const parts = [];
+            if (top) parts.push(`刚查图最像「${top.name}」`);
+            if (r.ai_profile?.coat) parts.push(`花色初判为${r.ai_profile.coat}`);
+            if (r.ai_profile?.breed && r.ai_profile.breed !== '未知') parts.push(`推测品种${r.ai_profile.breed}`);
+            const prompt = (parts.length ? parts.join('，') + '。' : '刚拍到一只校园猫，') + '请帮我查查它的历史目击、常出没区域和辨认特征。';
+            window.dispatchEvent(new CustomEvent('campuscats:ask-agent', { detail: { prompt } }));
+        });
     }
     async function identify() {
         const version = revision;
@@ -188,9 +198,7 @@ export function capturePage(main, onSuccess, {saveLocal, draft, lookupOnly = fal
         trigger.disabled = true;
         feedback.textContent = '正在比对校园图鉴…';
         try {
-            const result = lookupOnly || saveLocal
-                ? (await api('/agent/chat', { ...payload, message: '查看在库记录与花色。' })).identification
-                : await api('/identify', payload);
+            const result = await api('/identify', payload);
             if (disposed || version !== revision) return;
             if (!result?.results?.length) throw new Error('未取得识别结果，请再查一次。');
             previewResults(result);

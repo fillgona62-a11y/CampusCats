@@ -258,15 +258,18 @@ class App:
         if auth_route:
             body = read_json(env,8192)
             return accounts.auth(db,auth_route[1],body,env,self.secure,headers)
-        if path == "/api/agent/chat":
+        if path in ("/api/agent/chat", "/api/identify"):
             peer = env.get("REMOTE_ADDR", "")
             if os.getenv("CAMPUS_TRUST_LOCAL_PROXY") == "1" and peer in ("127.0.0.1","::1"):
                 peer = env.get("HTTP_X_REAL_IP") or peer
             actor = f"user:{user['id']}" if user else f"guest:{peer}"
-            accounts.throttle(db, f"agent:{actor}", 60, 3600)
-            return agent.chat(db, read_json(env, 9 * 1024 * 1024))
+            if path == "/api/agent/chat":
+                accounts.throttle(db, f"agent:{actor}", 60, 3600)
+                return agent.chat(db, read_json(env, 9 * 1024 * 1024))
+            accounts.throttle(db, f"photo:{actor}", 180, 3600)
+            return identify(db, read_json(env, 9 * 1024 * 1024))
         uid = require(user)
-        is_photo = path in ("/api/identify","/api/sightings")
+        is_photo = path == "/api/sightings"
         if is_photo:
             accounts.throttle(db,f"photo:{uid}",180,3600)
         body = read_json(env,9*1024*1024 if is_photo else 16384)
@@ -283,8 +286,6 @@ class App:
             result = delete_account(db,self.media,uid,body)
             headers.append(accounts.cookie("",self.secure))
             return result
-        if path == "/api/identify":
-            return identify(db,body)
         if path == "/api/sightings":
             return upload(db,self.media,uid,body)
         match = re.fullmatch(r"/api/cats/(\d{1,18})/aliases",path)

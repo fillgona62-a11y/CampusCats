@@ -38,10 +38,12 @@ export function agentSettings(main, settings, afterChange) {
         form.querySelector('fieldset').disabled = true;
         feedback.textContent = action === 'test' ? '正在请求所填接口…' : '正在保存…';
         try {
-            await api('/agent/settings', action === 'remove' ? {scope:data.scope, action} : {...data, action});
+            const reply = await api('/agent/settings', action === 'remove' ? {scope:data.scope, action} : {...data, action});
             if (!form.isConnected) return;
             if (action === 'test') {
-                feedback.textContent = '连接成功，所填对话模型已响应。';
+                feedback.textContent = reply?.vision_tested
+                    ? '连接成功，对话模型与视觉模型均已响应。'
+                    : '连接成功，所填对话模型已响应。';
                 return;
             }
             settings[data.scope] = action === 'remove' ? null : {
