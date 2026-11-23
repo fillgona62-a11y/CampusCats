@@ -1,7 +1,8 @@
-"""Photo quality checks and candidate retrieval for a manually selected cat.
+"""Photo quality checks, candidate retrieval, and DB-presence assessment.
 
-Descriptors compare colour, markings and texture. Scores are distances, never
-identity probabilities. Automatic identity requires a separate landmark comparison.
+Descriptors compare colour, markings and texture (or ONNX embeddings when
+CAMPUSCATS_ENCODER is configured). Automatic identity still requires separate
+landmark verification in face_match.py.
 """
 
 import math
@@ -107,6 +108,17 @@ def analyze_crop(image, box):
     return result
 
 
+def distance_to_similarity(distance, max_distance=DEFAULT_MAX_DISTANCE):
+    """Convert raw descriptor distance to a user-friendly 0..1 similarity score."""
+    if distance is None or not math.isfinite(distance):
+        return 0.0
+    if encoder.VERSION:
+        # Cosine distance in [0, 2]; map [0, max_distance*1.8] cleanly to [1, 0]
+        return round(max(0.0, min(1.0, 1.0 - distance)), 4)
+    ceiling = max(max_distance * 1.45, 0.45)
+    return round(max(0.0, min(1.0, 1.0 - distance / ceiling)), 4)
+
+
 def rank_candidates(query, references, limit=3, max_distance=DEFAULT_MAX_DISTANCE):
     """Rank unique identities by their closest reviewed photo; [] means abstain."""
     if limit <= 0 or not query.get("usable") or query.get("version") != MODEL_VERSION:
@@ -135,8 +147,30 @@ def rank_candidates(query, references, limit=3, max_distance=DEFAULT_MAX_DISTANC
     ordered = sorted(best, key=lambda identity: (best[identity], str(identity)))
     result = []
     for cat_id in ordered[:limit]:
-        candidate = {"cat_id":cat_id, "distance":round(best[cat_id], 5)}
+        dist = round(best[cat_id], 5)
+        candidate = {
+            "cat_id": cat_id,
+            "distance": dist,
+            "similarity": distance_to_similarity(dist, max_distance),
+        }
         if reference_ids[cat_id] is not None:
             candidate["reference_id"] = reference_ids[cat_id]
         result.append(candidate)
     return result
+
+
+def assess_db_match(candidates, reference_count, area="", *, usable=True):
+    """Describe candidate evidence; only the independent archiving step assigns identity."""
+    nearest = candidates[0] if candidates else {}
+    result = {"recorded": None, "top_cat_id": nearest.get("id"), "top_cat_name": nearest.get("name", ""),
+              "area_matched": bool(area and area.strip() == nearest.get("area"))}
+    if not usable:
+        return dict(result, status="poor_quality", summary="照片的辨认特征不足，请补拍清晰的脸部或侧身。")
+    if not reference_count:
+        return dict(result, status="no_reference", summary="图鉴尚无可用于比对的参考照。")
+    if not nearest:
+        return dict(result, status="no_candidate", summary="目前没有找到外观接近的参考照，可提交目击后继续辨认。")
+    if len(candidates) > 1 and candidates[1]["distance"] - nearest["distance"] < 0.03:
+        return dict(result, status="ambiguous", summary="有多只外观接近的候选，请对照脸部、四肢和尾巴的花纹。")
+    return dict(result, status="possible_match",
+                summary=f"可先对照「{nearest['name']}」的历史照片，再核对脸部或侧身特征。")

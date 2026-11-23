@@ -17,6 +17,7 @@ from wsgiref.simple_server import WSGIServer, make_server
 
 import accounts
 import surveys
+import agent
 from catalog import (SIGHTING_QUERY, audit, catalog, connect, encounter_receipt, field, identify, integer, one, personal_album,
                      reunions, review_breed, review_identity, revision, serialize, similar_pending, stats, upload)
 from media import Problem
@@ -185,6 +186,8 @@ class App:
     def get(self, db, path, user):
         if path == "/api/session":
             return {"user":user}
+        if path == "/api/agent/status":
+            return agent.status_info()
         if path == "/api/surveys":
             return surveys.board(db, user["id"] if user else None)
         if path == "/api/home":
@@ -229,6 +232,13 @@ class App:
         if auth_route:
             body = read_json(env,8192)
             return accounts.auth(db,auth_route[1],body,env,self.secure,headers)
+        if path == "/api/agent/chat":
+            peer = env.get("REMOTE_ADDR", "")
+            if os.getenv("CAMPUS_TRUST_LOCAL_PROXY") == "1" and peer in ("127.0.0.1","::1"):
+                peer = env.get("HTTP_X_REAL_IP") or peer
+            actor = f"user:{user['id']}" if user else f"guest:{peer}"
+            accounts.throttle(db, f"agent:{actor}", 60, 3600)
+            return agent.chat(db, read_json(env, 9 * 1024 * 1024))
         uid = require(user)
         is_photo = path in ("/api/identify","/api/sightings")
         if is_photo:

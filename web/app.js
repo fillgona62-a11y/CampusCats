@@ -1,6 +1,7 @@
 import { api, back, btn, busy, card, date, empty, esc, formValues, head, icon, img, notice, status } from './ui.js';
 import { capturePage } from './capture.js';
 import { albumPage, encounterPage } from './album.js';
+import { initAgentWidget } from './agent.js';
 import { surveyPage } from './surveys.js';
 import { reviewPage, bindBreed } from './review.js';
 const main = document.getElementById('content');
@@ -105,6 +106,7 @@ function auth(mode, requested = 'me') {
         e.preventDefault();
         busy(form.querySelector('button'), async () => {
             const reply = await api('/' + mode, formValues(form));
+            resetAgent();
             session = reply.user;
             recoveryCode = reply.recovery_code || '';
             chrome(mode);
@@ -170,6 +172,7 @@ function me(data) {
     const out = main.querySelector('#logout');
     out.onclick = () => busy(out, async () => {
         await api('/logout', {});
+        resetAgent();
         session = null;
         location.hash = 'home';
         notice('已退出登录。');
@@ -180,6 +183,7 @@ function me(data) {
         e.preventDefault();
         busy(del.querySelector('button'), async () => {
             await api('/account/delete', formValues(del));
+            resetAgent();
             session = null;
             location.hash = 'home';
             notice('账号已注销。');
@@ -206,6 +210,7 @@ async function route() {
         const personal = await api(page === 'me' ? '/me' : '/session');
         if (version !== serial)
             return;
+        if (session?.id !== personal.user?.id) resetAgent();
         session = personal.user;
         chrome(page);
         if (['login', 'register', 'recover'].includes(page)) {
@@ -287,4 +292,5 @@ window.addEventListener('pageshow', e => {
 });
 if ('serviceWorker' in navigator && isSecureContext)
     navigator.serviceWorker.register('/sw.js').catch(() => { });
+const resetAgent = initAgentWidget();
 route();

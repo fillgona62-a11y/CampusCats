@@ -3,12 +3,14 @@ import hashlib
 import json
 import re
 import sqlite3
+import time
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 
+import ai_vision
 from face_match import automatic_match
 from media import Problem, canonical_photo, prepare, save_media, validate_boxes
-from vision import MODEL_VERSION, analyze_crop, rank_candidates
+from vision import MODEL_VERSION, analyze_crop, assess_db_match, pixel_box, rank_candidates
 
 
 def connect(path):
@@ -104,8 +106,14 @@ def matched_profiles(analysis, refs, cats):
     candidates = []
     for match in rank_candidates(analysis, refs):
         target = match["reference_id"]
-        candidates.append(dict(cats[match["cat_id"]], reference_id=target,
-                               photo_url=f"/media/crop/{target}.jpg", thumbnail_url=f"/media/thumb/{target}.jpg"))
+        candidates.append(dict(
+            cats[match["cat_id"]],
+            reference_id=target,
+            distance=match["distance"],
+            similarity=match["similarity"],
+            photo_url=f"/media/crop/{target}.jpg",
+            thumbnail_url=f"/media/thumb/{target}.jpg",
+        ))
     return candidates
 
 
@@ -120,17 +128,34 @@ def breed_hint(candidates):
 
 def identify(db, body):
     boxes = validate_boxes(body.get("boxes"))
-    _,image = canonical_photo(body.get("photo"))
+    area = field(body, "area", 80) if body.get("area") is not None else ""
+    _, image = canonical_photo(body.get("photo"))
     db.execute("BEGIN")
     cats = catalog(db)
     refs = references(db)
+    db.commit()
+    deadline = time.monotonic() + 24
+    reference_count = len({r[0] for r in refs})
     results = []
     for box in boxes:
         analysis = analyze_crop(image, box)
         candidates = matched_profiles(analysis, refs, cats)
-        results.append({"box":box,"quality":analysis["warnings"],"warnings":analysis["warnings"],
-                        "usable":analysis["usable"], "candidates":candidates, "breed_hint":breed_hint(candidates)})
-    return {"results":results, "reference_count":len({r[0] for r in refs})}
+        crop = image.crop(pixel_box(image, box)).convert("RGB")
+        record_status = assess_db_match(candidates, reference_count, area=area, usable=analysis["usable"])
+        remaining = deadline - time.monotonic()
+        ai_profile = ai_vision.classify_cat_crop(crop, allow_remote=body.get("cloud_photo") is True and remaining >= 1,
+                                                 timeout=max(1, remaining)) if analysis["usable"] else None
+        results.append({
+            "box": box,
+            "quality": analysis["warnings"],
+            "warnings": analysis["warnings"],
+            "usable": analysis["usable"],
+            "candidates": candidates,
+            "breed_hint": breed_hint(candidates),
+            "record_status": record_status,
+            "ai_profile": ai_profile,
+        })
+    return {"results": results, "reference_count": reference_count}
 
 
 def serialize(db, rows, *, private=False):
@@ -357,7 +382,7 @@ def encounter_receipt(db, uid, frame_id):
 def reunions(db, uid):
     rows = db.execute("""
         SELECT s.id,s.cat_id,c.name,f.observed_at
-        FROM sightings s JOIN frames f ON s.frame_id=f.id JOIN cats c ON c.id=s.cat_id
+        FROM sightings s JOIN frames f ON f.id=s.frame_id JOIN cats c ON c.id=s.cat_id
         WHERE f.user_id=? AND s.status='confirmed' ORDER BY f.observed_at,s.id
     """, (uid,))
     grouped = {}
