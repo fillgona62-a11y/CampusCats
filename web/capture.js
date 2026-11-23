@@ -73,16 +73,17 @@ function aiProfileCard(ai) {
     ${chips.length ? `<div class="ai-chips">${chips.map(c => `<span>${esc(c)}</span>`).join('')}</div>` : ''}
     ${ai.summary ? `<p class="hint">${esc(ai.summary)}</p>` : ''}</div>`;
 }
-export function capturePage(main, onSuccess) {
-    main.innerHTML = `<div class="narrow">${head('记录目击', '拍一张清楚的照片，先看看校园图鉴里有没有它。')}
+export function capturePage(main, onSuccess, {saveLocal, draft} = {}) {
+    main.innerHTML = `<div class="narrow">${head(saveLocal ? '记录本机草稿' : '记录目击', saveLocal ? '拍照或选图后，照片、地点和备注保存在这台手机。' : '拍一张清楚的照片，先看看校园图鉴里有没有它。')}
     <section class="surface"><h2>拍摄或选取照片</h2><p>尽量让脸部或侧身花纹入镜。同框时，可以在照片上把每只猫分别框出来。</p>
     <div class="actions"><button type="button" class="btn" id="live-start">${icon('camera')}打开相机</button><button type="button" class="btn light" id="choose">${icon('image')}从相册选取</button></div>
     <input id="file" type="file" accept="image/*" hidden><input id="native" type="file" accept="image/*" capture="environment" hidden>
     <div id="live-panel" hidden><hr class="divider"><video class="live" id="viewfinder" autoplay muted playsinline></video><p id="live-quality" class="advice" role="status"></p><div class="actions"><button id="shutter" class="btn">拍下并查一查</button><button id="live-stop" class="btn light">关闭相机</button></div></div>
     <p id="file-error" class="form-error" role="alert"></p><button id="native-fallback" class="btn light" hidden>调用系统相机</button></section>
-    <form id="capture-form" class="surface" hidden><h2>标记照片里的猫</h2><p>单只猫可直接使用整图。拖动框住一只猫，再拖动就能添加同框的另一只。</p>
-    <div class="capture-stage"><div class="target-stage" id="stage" aria-label="在图上拖动添加猫框"><img id="preview" alt="本次目击照片"><div class="mark-layer" id="marks"></div></div></div>
-    <div class="actions"><button type="button" class="btn ghost" id="undo">撤销上一个框</button><button type="button" class="btn ghost" id="reset">使用整图</button></div>
+    <form id="capture-form" class="surface" hidden><h2>目击照片</h2>
+    <div class="mark-tools"><button type="button" class="btn light" id="mark-toggle" aria-pressed="false" aria-controls="stage">框选同框猫</button><button type="button" class="btn ghost" id="undo" hidden>撤销上一框</button></div>
+    <p id="mark-help" class="hint" aria-live="polite"></p>
+    <div class="capture-stage"><div class="target-stage" id="stage" aria-describedby="mark-help"><img id="preview" alt="本次目击照片" draggable="false"><div class="mark-layer" id="marks"></div></div></div>
     <div class="advice" id="quality" role="status"></div><label class="hint" id="cloud-option" hidden><input name="cloud_photo" type="checkbox"> 允许本次查图将所选画面发送给配置的视觉模型</label><button type="button" class="btn light" id="identify">${icon('search')}查一查图鉴（查重 + 识品种）</button>
     <div id="results" aria-live="polite"></div><hr class="divider"><h2>保存这次目击</h2><label class="field"><span>校园区域</span><input name="area" required maxlength="60" placeholder="例如，图书馆周边"></label>
     <label class="field"><span>目击时间</span><input type="datetime-local" name="observed" required></label>
@@ -91,6 +92,7 @@ export function capturePage(main, onSuccess) {
     const now = new Date();
     form.elements.observed.value = new Date(now - now.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
     let stream = null, monitor = null, disposed = false, photo = '', frame = null, boxes = [], suggestions = [], start = null, requestId = newRequestId(), revision = 0, acquire = 0, fileVersion = 0;
+    let drawing = false, pointerId = null;
     const targets = () => boxes.length ? boxes : [fullBox];
     function stopCamera() {
         acquire++;
@@ -105,15 +107,29 @@ export function capturePage(main, onSuccess) {
         return `<span class="boxmark ${extra}" style="left:${x * 100}%;top:${y * 100}%;width:${w * 100}%;height:${h * 100}%"><b>${label}</b></span>`;
     }
     function draw(draft = null) {
-        marks.innerHTML = targets().map((box, i) => mark(box, i + 1)).join('') + (draft ? mark(draft, boxes.length + 1, 'temp') : '');
+        marks.innerHTML = boxes.map((box, i) => mark(box, i + 1)).join('') + (draft ? mark(draft, boxes.length + 1, 'temp') : '');
+    }
+    function setDrawing(active) {
+        drawing = active;
+        start = null;
+        if (pointerId !== null && stage.hasPointerCapture(pointerId)) stage.releasePointerCapture(pointerId);
+        pointerId = null;
+        stage.classList.toggle('drawing', active);
+        const toggle = $('#mark-toggle');
+        toggle.setAttribute('aria-pressed', String(active));
+        toggle.textContent = active ? '取消框选' : boxes.length ? '再框一只' : '框选同框猫';
+        toggle.disabled = boxes.length >= 8;
+        $('#undo').hidden = !boxes.length;
+        $('#mark-help').textContent = active ? '在照片上沿对角拖动，松手完成一个框。' :
+            boxes.length ? `已标记 ${boxes.length} 只猫。` : '单只猫可直接使用整张照片。';
+        draw();
     }
     function update() {
         revision++;
         requestId = newRequestId();
         suggestions = [];
         $('#results').replaceChildren();
-        draw();
-        $('#undo').disabled = !boxes.length;
+        setDrawing(false);
         $('#quality').textContent = targets().map((box, i) => `猫 ${i + 1} · ${qualityHints(frame, box).join(' ') || '画面初检通过，可对照脸部和侧身花纹。'}`).join('　');
     }
     function useFrame(next) {
@@ -164,10 +180,16 @@ export function capturePage(main, onSuccess) {
         const result = await api('/identify', { photo, boxes: targets(), area, cloud_photo: form.elements.cloud_photo.checked });
         if (!disposed && version === revision) {
             previewResults(result);
-            $('#results').scrollIntoView({ block: 'nearest' });
         }
     }
-    api('/agent/status').then(status => {
+    if (saveLocal) {
+        $('#identify').hidden = true;
+        form.elements.automatic.closest('label').hidden = true;
+        form.elements.automatic.closest('label').nextElementSibling.hidden = true;
+        form.querySelector('[type=submit]').textContent = '保存到本机';
+        $('#shutter').textContent = '拍下照片';
+    }
+    if (!saveLocal) api('/agent/status').then(status => {
         if (!disposed) $('#cloud-option').hidden = status.vision_mode !== 'vlm';
     }).catch(() => {});
     $('#identify').onclick = e => busy(e.currentTarget, identify);
@@ -176,26 +198,23 @@ export function capturePage(main, onSuccess) {
         return [Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)), Math.min(1, Math.max(0, (e.clientY - r.top) / r.height))];
     };
     const between = (a, b) => [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.abs(a[0] - b[0]), Math.abs(a[1] - b[1])];
+    $('#mark-toggle').onclick = () => setDrawing(!drawing);
     stage.onpointerdown = e => {
-        if (!e.isPrimary || e.button !== 0)
+        if (!drawing || !e.isPrimary || e.button !== 0 || pointerId !== null)
             return;
-        if (boxes.length >= 8) {
-            notice('一张照片最多标记 8 只猫。');
-            return;
-        }
+        pointerId = e.pointerId;
         start = point(e);
         stage.setPointerCapture(e.pointerId);
     };
     stage.onpointermove = e => {
-        if (start && e.isPrimary)
+        if (start && e.pointerId === pointerId)
             draw(between(start, point(e)));
     };
-    stage.onpointercancel = () => {
-        start = null;
-        draw();
+    stage.onpointercancel = stage.onlostpointercapture = e => {
+        if (e.pointerId === pointerId) setDrawing(false);
     };
     stage.onpointerup = e => {
-        if (!start || !e.isPrimary)
+        if (!start || e.pointerId !== pointerId)
             return;
         const b = between(start, point(e));
         start = null;
@@ -204,16 +223,12 @@ export function capturePage(main, onSuccess) {
             update();
         }
         else {
-            draw();
+            setDrawing(false);
             notice('请从猫的一侧拖向对角，框出可辨认的身体部分。');
         }
     };
     $('#undo').onclick = () => {
         boxes.pop();
-        update();
-    };
-    $('#reset').onclick = () => {
-        boxes = [];
         update();
     };
     $('#choose').onclick = () => $('#file').click();
@@ -232,7 +247,7 @@ export function capturePage(main, onSuccess) {
                 await image.decode();
                 if (!disposed && version === fileVersion) {
                     useFrame(bitmapFrame(image, image.naturalWidth, image.naturalHeight));
-                    await busy($('#identify'), identify);
+                    if (!saveLocal) await busy($('#identify'), identify);
                 }
             }
             catch {
@@ -289,7 +304,7 @@ export function capturePage(main, onSuccess) {
         fileVersion++;
         useFrame(bitmapFrame(video, video.videoWidth, video.videoHeight));
         stopCamera();
-        await busy($('#identify'), identify);
+        if (!saveLocal) await busy($('#identify'), identify);
     };
     form.oninput = e => {
         if (e.target.name)
@@ -304,15 +319,33 @@ export function capturePage(main, onSuccess) {
                 throw new Error('请选择已经发生的目击时间。');
             if (!form.elements.area.value.trim())
                 throw new Error('请填写校园区域。');
-            const result = await api('/sightings', {
+            const payload = {
                 photo, boxes: targets(), area: form.elements.area.value.trim(), note: form.elements.note.value.trim(), request_id: requestId, observed_at: observed.toISOString(),
                 suggested_cat_ids: targets().map((_, i) => suggestions[i] ?? null),
                 automatic: form.elements.automatic.checked
-            });
+            };
+            const result = saveLocal ? await saveLocal(payload) : await api('/sightings', payload);
             if (!disposed)
                 onSuccess(result);
         }, form);
     };
+    if (draft) {
+        const preview = new Image();
+        preview.onload = () => {
+            if (disposed) return;
+            useFrame(bitmapFrame(preview, preview.naturalWidth, preview.naturalHeight));
+            photo = draft.photo;
+            boxes = draft.boxes.length === 1 && draft.boxes[0].every((n, i) => n === fullBox[i]) ? [] : draft.boxes.slice();
+            update();
+            form.elements.area.value = draft.area;
+            form.elements.note.value = draft.note;
+            const seen = new Date(draft.observed_at);
+            form.elements.observed.value = new Date(seen - seen.getTimezoneOffset() * 60000).toISOString().slice(0,16);
+            form.elements.automatic.checked = draft.automatic;
+            requestId = draft.request_id;
+        };
+        preview.src = draft.photo;
+    }
     return () => {
         disposed = true;
         stopCamera();

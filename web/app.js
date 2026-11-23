@@ -4,31 +4,38 @@ import { albumPage, encounterPage } from './album.js';
 import { initAgentWidget } from './agent.js';
 import { surveyPage } from './surveys.js';
 import { reviewPage, bindBreed } from './review.js';
+const installedAndroid = location.pathname === '/_app/index.html';
 const main = document.getElementById('content');
 let serial = 0, clean = null, session = null, recoveryCode = '', lastFilter = '', filterArea = '';
 const navItems = [['home', '首页', 'home'], ['atlas', '猫猫图鉴', 'book'], ['capture', '记录目击', 'camera'], ['me', '我的手记', 'user']];
 function chrome(route) {
-    let active = route === 'cat' ? 'atlas' : route;
+    let active = route === 'cat' ? 'atlas' : route === 'device-capture' ? 'capture' : route === 'device' ? 'me' : route;
     if (['login', 'register', 'recover', 'album', 'encounter'].includes(route))
         active = 'me';
     const items = [...navItems];
     if (session?.role === 'reviewer')
         items.push(['review', '维护', 'review']);
     for (const id of ['primary', 'mobile']) {
-        document.getElementById(id).innerHTML = items.map(([key, text, symbol]) => `<a href="#${key}" ${key === active ? 'aria-current="page"' : ''}>${id === 'mobile' ? icon(symbol) : ''}${text}</a>`).join('');
+        document.getElementById(id).innerHTML = items.map(([key, text, symbol]) => `<a href="#${key === 'capture' && installedAndroid && !session ? 'device-capture' : key}" ${key === active ? 'aria-current="page"' : ''}>${id === 'mobile' ? icon(symbol) : ''}${text}</a>`).join('');
     }
     document.getElementById('account').innerHTML = icon('user') + esc(session?.nickname || '登录');
     document.getElementById('account').href = session ? '#me' : '#login/me';
 }
-function home(data) {
-    const stats = data.stats;
-    main.innerHTML = `<section class="hero"><div class="hero-copy"><h1>校园猫图鉴</h1><p>拍下校园里的猫，用花纹认出老朋友，记下每一次相遇。</p><div class="actions">${btn('#capture', '记录一次目击', 'camera', 'lime')}<a class="hero-album" href="#album">${icon('book')} 我的猫册</a></div></div>
-    <figure class="hero-photo">${img('/assets/field-cat.jpg', '校园猫图鉴封面摄影', 'fetchpriority="high"')}<figcaption>封面摄影</figcaption></figure></section>
-    <section class="stats" aria-label="校园猫数量统计">${[['cat', stats.cats, '只', '累计已建档'], ['time', stats.active, '只', '近 30 天有目击'], ['focus', stats.pending, '条', '待辨认记录']].map(([symbol, n, unit, label]) => `<div class="stat">${icon(symbol)}<div><strong>${Number(n)}<i>${unit}</i></strong><span>${label}</span></div></div>`).join('')}</section>
-    <a href="#surveys" class="album-shortcut">${icon('pin')}<div><strong>校园定点观察</strong><small>查看本周哪些区域还缺观察，或参加一次十分钟记录。</small></div>${icon('arrow')}</a>
-    <div class="section-head"><h2>最近目击的猫</h2><a href="#atlas">查看图鉴 ${icon('arrow')}</a></div>
-    <div class="home-grid">${data.cats.length ? `<div class="gallery">${data.cats.slice(0, 3).map(card).join('')}</div>` : empty('cat', '第一只校园猫会是谁？', '拍下你遇见的猫。身份核实后，它就会出现在校园图鉴里。', btn('#capture', '提交第一条目击', 'camera', 'light'))}
-    <a href="#guide" class="guide-tile"><span class="tile-icon">${icon('focus')}</span>${icon('arrow')}<div><h3>拍摄指南</h3><p>拍清花纹，也给辨认留下线索。</p></div></a></div>`;
+function home(data = null, unavailable = false) {
+    const capture = installedAndroid && (!data || !session) ? '#device-capture' : '#capture';
+    const shortcuts = [['album','book','我的猫册'], ['surveys','pin','定点观察'], ['guide','focus','拍摄指南']];
+    if (installedAndroid) shortcuts.unshift(['device','image','本机草稿']);
+    main.innerHTML = `<div class="field-home"><section class="field-cover">
+      <img src="/assets/field-cat.jpg" alt="" fetchpriority="high">
+      <div><h1>校园猫图鉴</h1>${btn(capture, '拍照记录', 'camera', 'cover-action')}</div>
+    </section>
+    <dl class="field-counts" aria-label="校园目击统计">${[['cats','已建档','只'],['active','近30天见过','只'],['pending','待辨认','条']].map(([key,label,unit]) => `<div><dt>${label}</dt><dd>${data ? Number(data.stats[key]) : '—'}<small>${unit}</small></dd></div>`).join('')}</dl>
+    <section><div class="section-head"><h2>最近目击</h2><a href="#atlas">全部图鉴 ${icon('arrow')}</a></div>
+      ${data?.cats.length ? `<div class="gallery">${data.cats.slice(0,3).map(card).join('')}</div>` :
+        `<div class="field-empty">${icon('cat')}<div><strong>${data ? '还没有已建档的猫' : unavailable ? '图鉴暂时连不上' : '正在读取图鉴…'}</strong>${data ? '<p>第一只猫建档后，照片就会出现在这里。</p>' : unavailable ? '<button type="button" class="link" id="retry">重新连接</button>' : ''}</div></div>`}
+    </section>
+    <div class="field-links">${shortcuts.map(([url,symbol,title]) => `<a href="#${url}">${icon(symbol)}<span>${title}</span>${icon('arrow')}</a>`).join('')}</div></div>`;
+    if (unavailable) main.querySelector('#retry').onclick = route;
 }
 function atlas(cats) {
     const areas = [...new Set(cats.map(c => c.area).filter(Boolean))].sort();
@@ -93,7 +100,7 @@ function catPage({ cat, sightings }) {
     });
 }
 function auth(mode, requested = 'me') {
-    const target = /^(home|atlas|capture|me|review|album|surveys|cat\/\d{1,18}|encounter\/\d{1,18}(?:\/\d{1,18})?)$/.test(requested) ? requested : 'me';
+    const target = /^(home|atlas|capture(?:\/\d{1,16})?|me|review|album|surveys|cat\/\d{1,18}|encounter\/\d{1,18}(?:\/\d{1,18})?)$/.test(requested) ? requested : 'me';
     const create = mode === 'register', recover = mode === 'recover';
     const title = recover ? '找回密码' : create ? '创建观察账号' : '登录猫迹';
     main.innerHTML = `<div class="tiny">${back('#home', '返回首页')}${head(title, create ? '注册后可以提交目击，收集自己的重遇卡片。' : '')}<form class="surface" id="auth">${recover ? '' : `<div class="seg"><a class="${!create ? 'active' : ''}" href="#login/${target}">登录</a><a class="${create ? 'active' : ''}" href="#register/${target}">注册</a></div>`}
@@ -203,10 +210,22 @@ async function route() {
     let [page, id] = parts;
     if (!page || page === 'content')
         page = 'home';
+    main.dataset.page = page;
     chrome(page);
     main.innerHTML = '<p class="loading">正在读取…</p>';
     window.scrollTo(0, 0);
+    const localLinks = btn('#device', '本机草稿', 'book', 'light') + btn('#guide', '拍摄指南', 'focus', 'light');
     try {
+        if (page === 'guide') { guide(); return; }
+        if (installedAndroid && (page === 'device' || page === 'device-capture')) {
+            const device = await import('./device.js');
+            if (version !== serial) return;
+            if (page === 'device') await device.devicePage(main, () => version === serial);
+            else clean = capturePage(main, () => { location.hash = 'device'; }, {saveLocal:device.saveNote});
+            return;
+        }
+        if (installedAndroid && page === 'home')
+            home();
         const personal = await api(page === 'me' ? '/me' : '/session');
         if (version !== serial)
             return;
@@ -241,13 +260,17 @@ async function route() {
             return;
         }
         if (page === 'capture') {
+            let draft = null, device = null;
+            if (installedAndroid && id) {
+                device = await import('./device.js');
+                draft = await device.getNote(id);
+                if (version !== serial) return;
+                if (!draft) throw new Error('本机未找到这份草稿。');
+            }
             clean = capturePage(main, reply => {
+                if (draft) device.removeNote(draft.id).catch(() => notice('已上传，可在本机草稿中删除原稿。'));
                 location.hash = 'encounter/' + reply.sightings[0].frame_id;
-            });
-            return;
-        }
-        if (page === 'guide') {
-            guide();
+            }, {draft});
             return;
         }
         if (page === 'review') {
@@ -276,7 +299,8 @@ async function route() {
     }
     catch (e) {
         if (version === serial) {
-            main.innerHTML = empty('focus', '暂时无法读取', e.message, '<button class="btn light" id="retry">重新读取</button>');
+            if (installedAndroid && page === 'home') { home(null, true); return; }
+            main.innerHTML = empty('focus', '暂时无法读取', e.message, '<div class="actions"><button class="btn light" id="retry">重新读取</button>' + (installedAndroid ? localLinks : '') + '</div>');
             main.querySelector('#retry').onclick = route;
         }
     }
@@ -290,7 +314,7 @@ window.addEventListener('pageshow', e => {
     if (e.persisted)
         route();
 });
-if ('serviceWorker' in navigator && isSecureContext)
+if (!installedAndroid && 'serviceWorker' in navigator && isSecureContext)
     navigator.serviceWorker.register('/sw.js').catch(() => { });
 const resetAgent = initAgentWidget();
 route();

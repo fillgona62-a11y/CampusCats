@@ -1,94 +1,208 @@
 package campus.cats;
 
+import android.Manifest;
 import android.app.Activity;
-import android.os.Bundle;
 import android.content.ActivityNotFoundException;
+import android.content.ClipData;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.graphics.Color;
-import android.graphics.Typeface;
 import android.net.Uri;
-import android.view.Gravity;
-import android.view.inputmethod.EditorInfo;
-import android.widget.*;
-import java.net.URI;
+import android.os.Bundle;
+import android.provider.MediaStore;
+import android.util.Base64;
+import android.view.View;
+import android.view.WindowInsets;
+import android.webkit.*;
+import android.widget.FrameLayout;
+import android.widget.Toast;
+import java.io.*;
+import java.util.Arrays;
 
-/** The browser tab supplies system camera, gallery and web permissions. */
 public final class MainActivity extends Activity {
-    private static final int INK = Color.rgb(25, 61, 50);
-    private EditText server;
-    private TextView message;
-
-    private int dp(int value) { return Math.round(getResources().getDisplayMetrics().density * value); }
+    private static final String ENTRY = "/_app/index.html";
+    private static final int CAMERA = 11, PICK = 12, EXPORT = 13, TAKE = 14;
+    private WebView web;
+    private Uri origin, captureUri;
+    private PermissionRequest cameraRequest;
+    private ValueCallback<Uri[]> chooser;
+    private File exportFile;
+    private boolean systemCamera;
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
-        getWindow().setStatusBarColor(INK);
-        LinearLayout form = new LinearLayout(this);
-        form.setOrientation(LinearLayout.VERTICAL);
-        form.setPadding(dp(26), dp(36), dp(26), dp(28));
-        form.setGravity(Gravity.CENTER_VERTICAL);
-        form.setBackgroundColor(Color.rgb(247, 246, 239));
-        TextView title = new TextView(this);
-        title.setText("猫迹");
-        title.setTextSize(46);
-        title.setTextColor(INK);
-        title.setTypeface(Typeface.SERIF, Typeface.BOLD);
-        form.addView(title);
-        TextView hint = new TextView(this);
-        hint.setText("连接学校的猫图鉴");
-        hint.setTextSize(22);
-        hint.setPadding(0, dp(14), 0, dp(18));
-        form.addView(hint);
-        server = new EditText(this);
-        server.setSingleLine(true);
-        server.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_URI);
-        server.setHint("学校提供的 HTTPS 地址");
-        server.setContentDescription("图鉴服务地址");
-        int originId = getResources().getIdentifier("campus_origin", "string", getPackageName());
-        String configured = originId == 0 ? "" : getString(originId);
-        String saved = getPreferences(MODE_PRIVATE).getString("origin", configured);
-        server.setText(saved);
-        form.addView(server);
-        Button enter = new Button(this);
-        enter.setText("进入校园图鉴");
-        enter.setOnClickListener(v -> enter());
-        form.addView(enter);
-        server.setImeOptions(EditorInfo.IME_ACTION_GO);
-        server.setOnEditorActionListener((v, action, event) -> {
-            if (action != EditorInfo.IME_ACTION_GO) return false;
-            enter(); return true;
-        });
-        message = new TextView(this);
-        message.setText("首次使用请填写学校提供的地址。关闭图鉴页面可回到这里更换地址。");
-        message.setPadding(0, dp(14), 0, 0);
-        form.addView(message);
-        setContentView(form);
-        if (state == null && !saved.isEmpty()) enter();
+        origin = Uri.parse(getString(getResources().getIdentifier("campus_origin", "string", getPackageName())));
+        web = new WebView(this);
+        web.setBackgroundColor(Color.rgb(247,246,238));
+        getWindow().setStatusBarColor(Color.rgb(247,246,238));
+        getWindow().setNavigationBarColor(Color.rgb(247,246,238));
+        web.setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
+        FrameLayout screen = new FrameLayout(this);
+        screen.setBackgroundColor(Color.rgb(247,246,238));
+        screen.addView(web);
+        if (android.os.Build.VERSION.SDK_INT >= 35) {
+            screen.setOnApplyWindowInsetsListener((v, insets) -> {
+                android.graphics.Insets bars = insets.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout() | WindowInsets.Type.ime());
+                v.setPadding(bars.left,bars.top,bars.right,bars.bottom);
+                return WindowInsets.CONSUMED;
+            });
+        }
+        setContentView(screen);
+        WebSettings settings = web.getSettings();
+        settings.setJavaScriptEnabled(true);
+        settings.setDomStorageEnabled(true);
+        settings.setAllowFileAccess(false);
+        settings.setAllowContentAccess(false);
+        settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
+        CookieManager.getInstance().setAcceptCookie(true);
+        CookieManager.getInstance().setAcceptThirdPartyCookies(web,false);
+        web.setWebViewClient(new LocalClient());
+        web.setWebChromeClient(new Chrome());
+        String page = state == null ? null : state.getString("page");
+        if (state != null && state.getString("export") != null)
+            exportFile = new File(getCacheDir(), new File(state.getString("export")).getName());
+        web.loadUrl(page != null && isEntry(Uri.parse(page)) ? page : origin + ENTRY);
     }
 
-    private void enter() {
-        try {
-            URI url = new URI(server.getText().toString().trim());
-            String host = url.getHost();
-            boolean local = "localhost".equalsIgnoreCase(host) || "127.0.0.1".equals(host);
-            boolean allowed = "https".equalsIgnoreCase(url.getScheme())
-                || (local && "http".equalsIgnoreCase(url.getScheme()));
-            if (host == null || !allowed || url.getUserInfo() != null || url.getQuery() != null
-                    || url.getFragment() != null || !(url.getPath().isEmpty() || url.getPath().equals("/"))) {
-                throw new IllegalArgumentException();
-            }
-            URI origin = new URI(url.getScheme(), null, host, url.getPort(), "/", null, null);
-            Intent browse = new Intent(Intent.ACTION_VIEW, Uri.parse(origin.toASCIIString()));
-            Bundle extras = new Bundle();
-            extras.putBinder("android.support.customtabs.extra.SESSION", null);
-            browse.putExtras(extras);
-            browse.putExtra("android.support.customtabs.extra.TOOLBAR_COLOR", INK);
-            startActivity(browse);
-            getPreferences(MODE_PRIVATE).edit().putString("origin", origin.toASCIIString()).apply();
-        } catch (ActivityNotFoundException e) {
-            message.setText("请先启用设备上的浏览器，再打开图鉴。");
-        } catch (Exception e) {
-            server.setError("请输入完整的 HTTPS 服务地址。本机调试可使用 http://localhost:8765");
+    private boolean trusted(Uri url) {
+        return url != null && "https".equals(url.getScheme()) && origin.getEncodedAuthority().equals(url.getEncodedAuthority());
+    }
+    private boolean isEntry(Uri url) { return trusted(url) && ENTRY.equals(url.getPath()); }
+
+    private static WebResourceResponse missing() {
+        return new WebResourceResponse("text/plain","UTF-8",404,"Not Found",null,new ByteArrayInputStream(new byte[0]));
+    }
+    private class LocalClient extends WebViewClient {
+        @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+            return !isEntry(request.getUrl());
+        }
+        @Override public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+            Uri uri = request.getUrl();
+            String path = uri.getEncodedPath();
+            if (!trusted(uri) || path == null) return missing();
+            if (!request.isForMainFrame() && (path.startsWith("/api/") || path.startsWith("/media/"))) return null;
+            String name = ENTRY.equals(path) ? "index.html" : path.substring(1);
+            if (!"GET".equals(request.getMethod()) || !name.matches("(?:assets/)?[A-Za-z0-9_-]+\\.[A-Za-z0-9]+")) return missing();
+            String mime;
+            if (name.endsWith(".js")) mime = "text/javascript";
+            else if (name.endsWith(".html")) mime = "text/html";
+            else if (name.endsWith(".css")) mime = "text/css";
+            else if (name.endsWith(".jpg")) mime = "image/jpeg";
+            else if (name.endsWith(".png")) mime = "image/png";
+            else if (name.endsWith(".webmanifest")) mime = "application/manifest+json";
+            else return missing();
+            try {
+                WebResourceResponse res = new WebResourceResponse(mime, mime.startsWith("image/") ? null : "UTF-8", getAssets().open(name));
+                if (name.equals("index.html")) res.setResponseHeaders(java.util.Collections.singletonMap("Content-Security-Policy",
+                    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' blob: data:; frame-src 'none'; object-src 'none'; base-uri 'none'"));
+                return res;
+            } catch (IOException ex) { return missing(); }
         }
     }
+    private class Chrome extends WebChromeClient {
+        @Override public void onPermissionRequest(PermissionRequest req) {
+            if (!trusted(req.getOrigin()) || !Arrays.asList(req.getResources()).contains(PermissionRequest.RESOURCE_VIDEO_CAPTURE)) { req.deny(); return; }
+            if (cameraRequest != null) cameraRequest.deny();
+            cameraRequest = req;
+            requestCamera();
+        }
+        @Override public void onPermissionRequestCanceled(PermissionRequest req) {
+            if (cameraRequest == req) cameraRequest = null;
+        }
+        @Override public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> callback, FileChooserParams params) {
+            completeChooser(null);
+            chooser = callback;
+            if (params.isCaptureEnabled()) { systemCamera = true; requestCamera(); }
+            else {
+                Intent pick = new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("image/*");
+                try { startActivityForResult(pick, PICK); } catch (ActivityNotFoundException ex) { completeChooser(null); }
+            }
+            return true;
+        }
+        @Override public boolean onJsPrompt(WebView view, String url, String message, String payload, JsPromptResult result) {
+            if (!isEntry(Uri.parse(url)) || !message.startsWith("campuscats-save:")) return super.onJsPrompt(view,url,message,payload,result);
+            String filename = message.substring("campuscats-save:".length());
+            boolean png = filename.endsWith(".png");
+            if (exportFile != null || (!png && !filename.endsWith(".csv")) || payload == null || payload.length() > 12000000) {
+                result.cancel(); return true;
+            }
+            try {
+                exportFile = File.createTempFile("export-", ".tmp", getCacheDir());
+                try (OutputStream out = new FileOutputStream(exportFile)) { out.write(Base64.decode(payload,Base64.DEFAULT)); }
+                Intent save = new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
+                    .setType(png ? "image/png" : "text/csv").putExtra(Intent.EXTRA_TITLE,new File(filename).getName());
+                startActivityForResult(save, EXPORT);
+                result.confirm("ok");
+            } catch (IOException | RuntimeException ex) { clearExport(); result.cancel(); }
+            return true;
+        }
+    }
+    private void requestCamera() {
+        if (checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) cameraDecision(true);
+        else requestPermissions(new String[]{Manifest.permission.CAMERA}, CAMERA);
+    }
+    @Override public void onRequestPermissionsResult(int request, String[] permissions, int[] grants) {
+        super.onRequestPermissionsResult(request,permissions,grants);
+        if (request == CAMERA) cameraDecision(grants.length > 0 && grants[0] == PackageManager.PERMISSION_GRANTED);
+    }
+    private void cameraDecision(boolean allowed) {
+        if (cameraRequest != null) {
+            if (allowed) cameraRequest.grant(new String[]{PermissionRequest.RESOURCE_VIDEO_CAPTURE}); else cameraRequest.deny();
+            cameraRequest = null;
+        }
+        if (!systemCamera) return;
+        systemCamera = false;
+        if (!allowed) { completeChooser(null); return; }
+        try {
+            captureUri = CaptureFile.create(this);
+            Intent intent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE).putExtra(MediaStore.EXTRA_OUTPUT,captureUri);
+            intent.setClipData(ClipData.newRawUri("photo",captureUri));
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+            startActivityForResult(intent,TAKE);
+        } catch (IOException | RuntimeException ex) { completeChooser(null); }
+    }
+    private void completeChooser(Uri uri) {
+        ValueCallback<Uri[]> previous = chooser;
+        chooser = null;
+        if (previous != null) previous.onReceiveValue(uri == null ? null : new Uri[]{uri});
+    }
+    private void clearExport() {
+        if (exportFile != null) exportFile.delete();
+        exportFile = null;
+    }
+    @Override protected void onActivityResult(int code,int result,Intent data) {
+        super.onActivityResult(code,result,data);
+        Uri selected = result == RESULT_OK && data != null ? data.getData() : null;
+        if (code == PICK) completeChooser(selected != null && "content".equals(selected.getScheme()) && !CaptureFile.AUTH.equals(selected.getAuthority()) ? selected : null);
+        if (code == TAKE) {
+            if (captureUri != null) revokeUriPermission(captureUri,Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+            completeChooser(result == RESULT_OK ? captureUri : null);
+            captureUri = null;
+        }
+        if (code == EXPORT && exportFile != null) {
+            if (selected != null && "content".equals(selected.getScheme())) {
+                try (InputStream in = new FileInputStream(exportFile); OutputStream out = getContentResolver().openOutputStream(selected,"w")) {
+                    if (out == null) throw new IOException();
+                    byte[] buffer = new byte[16384]; int read;
+                    while ((read=in.read(buffer)) != -1) out.write(buffer,0,read);
+                    Toast.makeText(this,"文件已保存",Toast.LENGTH_SHORT).show();
+                } catch (IOException | RuntimeException ex) { Toast.makeText(this,"保存失败，请重试",Toast.LENGTH_SHORT).show(); }
+            }
+            clearExport();
+        }
+    }
+    @Override protected void onSaveInstanceState(Bundle state) {
+        super.onSaveInstanceState(state);
+        state.putString("page",web.getUrl());
+        if (exportFile != null) state.putString("export",exportFile.getName());
+    }
+    @Override protected void onPause() { super.onPause(); web.onPause(); CookieManager.getInstance().flush(); }
+    @Override protected void onResume() { super.onResume(); if (web != null) web.onResume(); }
+    @Override public void onBackPressed() {
+        web.evaluateJavascript("(function(){var d=document.querySelector('dialog[open]'); if(d){d.close();return true;} return false;})()", closed -> {
+            if ("true".equals(closed)) return;
+            if (web.canGoBack()) web.goBack(); else super.onBackPressed();
+        });
+    }
+    @Override protected void onDestroy() { completeChooser(null); web.destroy(); super.onDestroy(); }
 }

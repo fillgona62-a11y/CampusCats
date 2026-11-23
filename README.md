@@ -4,11 +4,11 @@
 
 ## 手机下载与使用
 
-- **安卓手机**　下载联网测试版 APK，打开文件并按系统提示安装。首次启动「猫迹」会打开校园图鉴，服务地址已预设。[下载安卓 APK](downloads/CampusCats-Android.apk)
+- **安卓手机**　用 Android 8.0 或以上版本打开安装包，按提示安装或更新「猫迹」。首页点「拍照记录」即可拍照或从相册选图。照片、地点和备注可以先存为本机草稿，联网登录后再提交和比对。[下载安卓 APK](https://42.194.143.221/downloads/CampusCats-Android.apk)
 - **iPhone**　用 Safari 打开猫迹，点「分享」→「添加到主屏幕」，以后就能从桌面图标进入。[打开校园猫图鉴](https://42.194.143.221/)
 - **iOS 工程下载**　目前提供 Xcode 工程 ZIP，尚无可直接安装的签名 IPA。要在真机上运行，请在 Mac 上解压，用 Xcode 打开 `CampusCats.xcodeproj`，在「Signing & Capabilities」选择自己的开发团队，选择已连接的 iPhone 后运行。首次打开时填入试点地址 `https://42.194.143.221`。[下载 iOS 工程 ZIP](downloads/CampusCats-iOS-Xcode.zip)
 
-从 GitHub 下载 APK 或 ZIP 时，请先登录有此私有仓库访问权限的账号。点上面的文件链接，再点文件页右上角的下载按钮（Download raw file）。网页版图鉴可直接访问。
+安卓安装包可以直接从试点服务器下载。下载 iOS 工程时，请先登录有仓库访问权限的 GitHub 账号，打开 ZIP 文件页，再点右上角的下载按钮（Download raw file）。
 
 ## 本地启动
 

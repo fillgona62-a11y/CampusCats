@@ -37,8 +37,8 @@ export function initAgentWidget() {
     const root = document.createElement('div');
     root.id = 'agent-root';
     root.innerHTML = `
-      <button type="button" id="agent-fab" class="agent-fab" aria-label="打开猫迹智能助手" aria-expanded="false">猫迹助手</button>
-      <section id="agent-drawer" class="agent-drawer" hidden aria-label="猫迹智能助手对话">
+      <button type="button" id="agent-fab" class="agent-fab" aria-haspopup="dialog" aria-controls="agent-drawer" aria-expanded="false">猫迹助手</button>
+      <dialog id="agent-drawer" class="agent-drawer" aria-label="猫迹智能助手对话">
         <header class="agent-head">
           <div><strong>猫迹智能助手</strong><small id="agent-mode">正在连接…</small></div>
           <button type="button" id="agent-close" class="agent-close" aria-label="关闭">×</button>
@@ -63,10 +63,11 @@ export function initAgentWidget() {
           <input id="agent-input" type="text" maxlength="500" placeholder="问找猫、查重或品种…" autocomplete="off">
           <button type="submit" id="agent-send" class="btn">发送</button>
         </form>
-      </section>`;
+      </dialog>`;
     document.body.appendChild(root);
 
     const fab = root.querySelector('#agent-fab');
+    document.querySelector('#account').before(fab);
     const drawer = root.querySelector('#agent-drawer');
     const log = root.querySelector('#agent-log');
     const modeEl = root.querySelector('#agent-mode');
@@ -102,22 +103,27 @@ export function initAgentWidget() {
         try {
             const st = await api('/agent/status');
             root.querySelector('#agent-cloud-label').hidden = st.vision_mode !== 'vlm';
-            modeEl.textContent = st.mode === 'llm' ? `大模型模式 · ${st.chat_model}` : '本地查库模式（配置 API Key 可解锁大模型对话）';
+            modeEl.textContent = st.mode === 'llm' ? `大模型模式 · ${st.chat_model}` : '校园图鉴查询';
         } catch {
-            modeEl.textContent = '在线';
+            modeEl.textContent = '暂时连不上服务器';
         }
     }
 
     function toggle(open) {
-        drawer.hidden = !open;
-        fab.setAttribute('aria-expanded', String(open));
-        if (open) {
+        if (open && !drawer.open) {
+            drawer.showModal();
+            document.documentElement.classList.add('chat-open');
+            fab.setAttribute('aria-expanded', 'true');
             loadStatus();
-            input.focus();
-        }
+        } else if (!open && drawer.open) drawer.close();
     }
 
-    fab.onclick = () => toggle(drawer.hidden);
+    drawer.onclose = () => {
+        document.documentElement.classList.remove('chat-open');
+        fab.setAttribute('aria-expanded', 'false');
+    };
+    window.addEventListener('hashchange', () => toggle(false));
+    fab.onclick = () => toggle(true);
     root.querySelector('#agent-close').onclick = () => toggle(false);
     root.querySelector('#agent-pick').onclick = () => fileInput.click();
     root.querySelector('#agent-photo-clear').onclick = () => {

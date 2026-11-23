@@ -29,10 +29,11 @@ $jar = Join-Path $build 'app.jar'
 $unsigned = Join-Path $build 'unsigned.apk'
 $aligned = Join-Path $build 'aligned.apk'
 $key = Join-Path $WorkDir 'pilot-debug.jks'
-$source = Join-Path $PSScriptRoot 'src\campus\cats\MainActivity.java'
+$sources = @(Get-ChildItem -Path (Join-Path $PSScriptRoot 'src\campus\cats\*.java') | ForEach-Object FullName)
 $emptySources = Join-Path $build 'sourcepath'
 New-Item -ItemType Directory -Path $emptySources | Out-Null
-Invoke-Checked "$Jdk\bin\javac.exe" @('-encoding','UTF-8','-Xlint:-options','-source','8','-target','8','-sourcepath',$emptySources,'-classpath',$platform,'-d',$classes,$source)
+$compileArgs = @('-encoding','UTF-8','-Xlint:-options','-source','8','-target','8','-sourcepath',$emptySources,'-classpath',$platform,'-d',$classes) + $sources
+Invoke-Checked "$Jdk\bin\javac.exe" $compileArgs
 Invoke-Checked "$Jdk\bin\jar.exe" @('cf',$jar,'-C',$classes,'.')
 Invoke-Checked "$bt\d8.bat" @('--min-api','26','--lib',$platform,'--output',$dex,$jar)
 $res = Join-Path $PSScriptRoot 'res'
@@ -48,7 +49,13 @@ if ($SchoolOrigin) {
     $config.SelectSingleNode("//string[@name='campus_origin']").InnerText = $uri.GetLeftPart([System.UriPartial]::Authority)
     $config.Save($configFile)
 }
-Invoke-Checked "$bt\aapt.exe" @('package','-f','-M',"$PSScriptRoot\AndroidManifest.xml",'-S',$res,'-I',$platform,'-F',$unsigned)
+$assets = Join-Path $build 'assets'
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot '..\..\web') -Destination $assets -Recurse
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'android-files.js') -Destination $assets
+$index = Join-Path $assets 'index.html'
+$markup = [IO.File]::ReadAllText($index).Replace('</head>', '<script type="module" src="/android-files.js"></script></head>')
+[IO.File]::WriteAllText($index,$markup,[Text.UTF8Encoding]::new($false))
+Invoke-Checked "$bt\aapt.exe" @('package','-f','-M',"$PSScriptRoot\AndroidManifest.xml",'-S',$res,'-A',$assets,'-I',$platform,'-F',$unsigned)
 Invoke-Checked "$Jdk\bin\jar.exe" @('uf',$unsigned,'-C',$dex,'classes.dex')
 Invoke-Checked "$bt\zipalign.exe" @('-f','4',$unsigned,$aligned)
 if (!(Test-Path -LiteralPath $key)) {
