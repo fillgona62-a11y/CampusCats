@@ -103,11 +103,12 @@ TOOLS = [
 
 def status_info():
     cfg = ai_vision.llm_config()
-    chat_model = os.getenv("CAMPUSCATS_LLM_MODEL", "").strip() or DEFAULT_CHAT_MODEL
+    chat_model = cfg.get("chat_model") or os.getenv("CAMPUSCATS_LLM_MODEL", "").strip() or DEFAULT_CHAT_MODEL
     return {
         "mode": "llm" if cfg["enabled"] else "local_fallback",
         "chat_model": chat_model if cfg["enabled"] else None,
-        "vision_mode": "vlm" if cfg["enabled"] else "local_heuristic",
+        "scope": cfg.get("scope", "shared"),
+        "vision_mode": "vlm" if cfg["enabled"] and cfg["vision_model"] else "local_heuristic",
         "vision_model": cfg["vision_model"] if cfg["enabled"] else None,
         "onnx_encoder": bool(encoder.VERSION),
     }
@@ -214,7 +215,7 @@ def _execute_tool(db, name, args, context):
 
 
 def _call_chat_llm(messages, cfg, *, require_photo=False):
-    chat_model = os.getenv("CAMPUSCATS_LLM_MODEL", "").strip() or DEFAULT_CHAT_MODEL
+    chat_model = cfg.get("chat_model") or os.getenv("CAMPUSCATS_LLM_MODEL", "").strip() or DEFAULT_CHAT_MODEL
     payload = {
         "model": chat_model,
         "temperature": 0.3,
@@ -224,6 +225,13 @@ def _call_chat_llm(messages, cfg, *, require_photo=False):
                        if require_photo
                        else "auto",
     }
+    if cfg.get("scope"):
+        from providers import completion
+        payload.pop("temperature")
+        if cfg["protocol"] == "chat":
+            payload.pop("tools")
+            payload.pop("tool_choice")
+        return completion(cfg, payload)
     req = urllib.request.Request(
         f"{cfg['base_url']}/chat/completions",
         data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
@@ -358,6 +366,14 @@ def chat(db, body):
 
     used_tools = []
     try:
+        if cfg.get("protocol") == "chat":
+            local = _local_fallback(db, message, context)
+            messages.insert(1, {"role":"system", "content":"本轮校园图鉴的查询结果供参考：" + local["reply"]})
+            response = _call_chat_llm(messages, cfg)
+            reply = response["choices"][0]["message"]["content"]
+            if not isinstance(reply, str) or not reply.strip():
+                raise ValueError("Agent 未返回文本。")
+            return dict(local, mode="llm", reply=reply)
         for _ in range(4):
             resp = _call_chat_llm(messages, cfg, require_photo=bool(photo and not context["identification"]))
             choice = resp["choices"][0]["message"]

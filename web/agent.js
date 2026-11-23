@@ -37,10 +37,11 @@ export function initAgentWidget() {
     const root = document.createElement('div');
     root.id = 'agent-root';
     root.innerHTML = `
-      <button type="button" id="agent-fab" class="agent-fab" aria-haspopup="dialog" aria-controls="agent-drawer" aria-expanded="false">猫迹助手</button>
-      <dialog id="agent-drawer" class="agent-drawer" aria-label="猫迹智能助手对话">
+      <button type="button" id="agent-fab" class="agent-fab" aria-haspopup="dialog" aria-controls="agent-drawer" aria-expanded="false">猫猫助手</button>
+      <dialog id="agent-drawer" class="agent-drawer" aria-label="猫猫助手对话">
         <header class="agent-head">
-          <div><strong>猫迹智能助手</strong><small id="agent-mode">正在连接…</small></div>
+          <div><strong>猫猫助手</strong><small id="agent-mode">正在连接…</small></div>
+          <a href="#agent-settings" id="assistant-settings">接入 Agent</a>
           <button type="button" id="agent-close" class="agent-close" aria-label="关闭">×</button>
         </header>
         <div id="agent-log" class="agent-log" aria-live="polite">
@@ -103,7 +104,7 @@ export function initAgentWidget() {
         try {
             const st = await api('/agent/status');
             root.querySelector('#agent-cloud-label').hidden = st.vision_mode !== 'vlm';
-            modeEl.textContent = st.mode === 'llm' ? `大模型模式 · ${st.chat_model}` : '校园图鉴查询';
+            modeEl.textContent = st.mode === 'llm' ? `${st.scope === 'personal' ? '我的 Agent' : '校园共用 Agent'} · ${st.chat_model}` : '校园图鉴查询';
         } catch {
             modeEl.textContent = '暂时连不上服务器';
         }
@@ -124,6 +125,7 @@ export function initAgentWidget() {
     };
     window.addEventListener('hashchange', () => toggle(false));
     fab.onclick = () => toggle(true);
+    root.querySelector('#assistant-settings').onclick = () => toggle(false);
     root.querySelector('#agent-close').onclick = () => toggle(false);
     root.querySelector('#agent-pick').onclick = () => fileInput.click();
     root.querySelector('#agent-photo-clear').onclick = () => {

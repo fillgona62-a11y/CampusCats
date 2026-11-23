@@ -2,6 +2,7 @@ import { api, back, btn, busy, card, date, empty, esc, formValues, head, icon, i
 import { capturePage } from './capture.js';
 import { albumPage, encounterPage } from './album.js';
 import { initAgentWidget } from './agent.js';
+import { agentSettings } from './agent-settings.js';
 import { surveyPage } from './surveys.js';
 import { reviewPage, bindBreed } from './review.js';
 const installedAndroid = location.pathname === '/_app/index.html';
@@ -29,6 +30,8 @@ function home(data = null, unavailable = false) {
       <img src="/assets/field-cat.jpg" alt="" fetchpriority="high">
       <div><h1>校园猫图鉴</h1>${btn(capture, '拍照记录', 'camera', 'cover-action')}</div>
     </section>
+    <a class="photo-lookup" href="#lookup">${icon('search')}<strong>照片查查</strong><span>查重 · 识别花色</span>${icon('arrow')}</a>
+    <div class="home-agent"><button type="button" id="home-agent">${icon('cat')} 猫猫助手</button><a href="#agent-settings">接入 Agent ${icon('arrow')}</a></div>
     <dl class="field-counts" aria-label="校园目击统计">${[['cats','已建档','只'],['active','近30天见过','只'],['pending','待辨认','条']].map(([key,label,unit]) => `<div><dt>${label}</dt><dd>${data ? Number(data.stats[key]) : '—'}<small>${unit}</small></dd></div>`).join('')}</dl>
     <section><div class="section-head"><h2>最近目击</h2><a href="#atlas">全部图鉴 ${icon('arrow')}</a></div>
       ${data?.cats.length ? `<div class="gallery">${data.cats.slice(0,3).map(card).join('')}</div>` :
@@ -36,6 +39,7 @@ function home(data = null, unavailable = false) {
     </section>
     <div class="field-links">${shortcuts.map(([url,symbol,title]) => `<a href="#${url}">${icon(symbol)}<span>${title}</span>${icon('arrow')}</a>`).join('')}</div></div>`;
     if (unavailable) main.querySelector('#retry').onclick = route;
+    main.querySelector('#home-agent').onclick = () => document.querySelector('#agent-fab').click();
 }
 function atlas(cats) {
     const areas = [...new Set(cats.map(c => c.area).filter(Boolean))].sort();
@@ -100,7 +104,7 @@ function catPage({ cat, sightings }) {
     });
 }
 function auth(mode, requested = 'me') {
-    const target = /^(home|atlas|capture(?:\/\d{1,16})?|me|review|album|surveys|cat\/\d{1,18}|encounter\/\d{1,18}(?:\/\d{1,18})?)$/.test(requested) ? requested : 'me';
+    const target = /^(home|atlas|agent-settings|capture(?:\/\d{1,16})?|me|review|album|surveys|cat\/\d{1,18}|encounter\/\d{1,18}(?:\/\d{1,18})?)$/.test(requested) ? requested : 'me';
     const create = mode === 'register', recover = mode === 'recover';
     const title = recover ? '找回密码' : create ? '创建观察账号' : '登录猫迹';
     main.innerHTML = `<div class="tiny">${back('#home', '返回首页')}${head(title, create ? '注册后可以提交目击，收集自己的重遇卡片。' : '')}<form class="surface" id="auth">${recover ? '' : `<div class="seg"><a class="${!create ? 'active' : ''}" href="#login/${target}">登录</a><a class="${create ? 'active' : ''}" href="#register/${target}">注册</a></div>`}
@@ -217,6 +221,10 @@ async function route() {
     const localLinks = btn('#device', '本机草稿', 'book', 'light') + btn('#guide', '拍摄指南', 'focus', 'light');
     try {
         if (page === 'guide') { guide(); return; }
+        if (page === 'lookup') {
+            clean = capturePage(main, null, {lookupOnly:true});
+            return;
+        }
         if (installedAndroid && (page === 'device' || page === 'device-capture')) {
             const device = await import('./device.js');
             if (version !== serial) return;
@@ -236,12 +244,17 @@ async function route() {
             auth(page, parts.slice(1).join('/') || 'me');
             return;
         }
-        if (['capture', 'me', 'review', 'album', 'encounter'].includes(page) && !session) {
+        if (['capture', 'me', 'review', 'album', 'encounter', 'agent-settings'].includes(page) && !session) {
             auth('login', parts.join('/'));
             return;
         }
         if (page === 'me') {
             me(personal);
+            return;
+        }
+        if (page === 'agent-settings') {
+            const settings = await api('/agent/settings');
+            if (version === serial) agentSettings(main, settings, resetAgent);
             return;
         }
         if (page === 'surveys') {

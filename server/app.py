@@ -16,6 +16,7 @@ from urllib.parse import urlsplit
 from wsgiref.simple_server import WSGIServer, make_server
 
 import accounts
+import providers
 import surveys
 import agent
 from catalog import (SIGHTING_QUERY, audit, catalog, connect, encounter_receipt, field, identify, integer, one, personal_album,
@@ -74,6 +75,7 @@ def delete_account(db, media_dir, uid, body):
         "JOIN frames f ON f.id=s.frame_id WHERE f.user_id=? UNION SELECT t.image FROM thumbnails t "
         "JOIN sightings s ON s.id=t.sighting_id JOIN frames f ON f.id=s.frame_id WHERE f.user_id=?", (uid,uid,uid))]
     db.execute("DELETE FROM sessions WHERE user_id=?",(uid,))
+    db.execute("DELETE FROM agent_providers WHERE owner=?", (uid,))
     db.execute("DELETE FROM spot_checks WHERE user_id=?",(uid,))
     db.execute("DELETE FROM sightings WHERE frame_id IN (SELECT id FROM frames WHERE user_id=?)",(uid,))
     db.execute("DELETE FROM frames WHERE user_id=?",(uid,))
@@ -112,10 +114,14 @@ class App:
         method, path = env["REQUEST_METHOD"], env["PATH_INFO"]
         headers = [("Cache-Control","no-store"),("X-Content-Type-Options","nosniff"),
                    ("Referrer-Policy","same-origin")]
+        provider_token = None
         try:
             if path.startswith(("/api/","/media/")):
                 with closing(connect(self.db_path)) as db, db:
                     user = accounts.current_user(db,env)
+                    if path in ("/api/agent/chat", "/api/agent/status", "/api/identify"):
+                        cfg = providers.effective(db, user["id"] if user else None, self.data)
+                        provider_token = providers.active.set(cfg)
                     if method == "POST" and path.startswith("/api/"):
                         if env.get("HTTP_ORIGIN") and urlsplit(env["HTTP_ORIGIN"]).netloc != env.get("HTTP_HOST"):
                             raise Problem("请求来源无效。",403)
@@ -146,6 +152,9 @@ class App:
             status = 500
             body,mime = '{"error":"服务器处理失败，请稍后再试。"}'.encode(),"application/json; charset=utf-8"
             headers = [h for h in headers if h[0] != "Set-Cookie"]
+        finally:
+            if provider_token is not None:
+                providers.active.reset(provider_token)
         headers += [("Content-Type",mime),("Content-Length",str(len(body)))]
         start_response(f"{status} {HTTPStatus(status).phrase}", headers)
         return [b"" if method == "HEAD" else body]
@@ -184,6 +193,12 @@ class App:
             raise Problem("照片已撤回或暂不可用。",404) from None
 
     def get(self, db, path, user):
+        if path == "/api/agent/settings":
+            uid = require(user)
+            result = {"personal":providers.public(providers.saved(db, uid))}
+            if user["role"] == "reviewer":
+                result["shared"] = providers.public(providers.saved(db, 0))
+            return result
         if path == "/api/session":
             return {"user":user}
         if path == "/api/agent/status":
@@ -228,6 +243,17 @@ class App:
         raise Problem("接口不存在。",404)
 
     def post(self, db, path, user, env, headers):
+        if path == "/api/agent/settings":
+            uid = require(user)
+            body = read_json(env, 8192)
+            scope = body.get("scope")
+            if scope == "shared":
+                require(user, reviewer=True)
+            elif scope != "personal":
+                raise Problem("请选择个人配置或校园共用配置。")
+            if body.get("action") == "test":
+                accounts.throttle(db, f"provider-test:{uid}", 30, 3600)
+            return providers.configure(db, 0 if scope == "shared" else uid, body, self.data)
         auth_route = re.fullmatch(r"/api/(register|login|recover)",path)
         if auth_route:
             body = read_json(env,8192)

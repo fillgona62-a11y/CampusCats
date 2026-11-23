@@ -16,6 +16,7 @@ import urllib.error
 import urllib.request
 
 from PIL import Image
+import providers
 
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_VISION_MODEL = "gpt-4o-mini"
@@ -23,6 +24,9 @@ DEFAULT_TIMEOUT = 25
 
 
 def llm_config():
+    configured = providers.active.get()
+    if configured:
+        return configured
     api_key = os.getenv("CAMPUSCATS_LLM_API_KEY", "").strip()
     base_url = os.getenv("CAMPUSCATS_LLM_BASE_URL", DEFAULT_BASE_URL).strip().rstrip("/")
     vision_model = (
@@ -176,6 +180,14 @@ def _call_vlm(crop, cfg):
             }
         ],
     }
+    if cfg.get("scope"):
+        raw = providers.completion(cfg, payload)
+    else:
+        raw = _environment_completion(cfg, payload)
+    return _vision_result(raw, cfg["vision_model"])
+
+
+def _environment_completion(cfg, payload):
     url = f"{cfg['base_url']}/chat/completions"
     req = urllib.request.Request(
         url,
@@ -188,7 +200,10 @@ def _call_vlm(crop, cfg):
         method="POST",
     )
     with urllib.request.urlopen(req, timeout=cfg["timeout"]) as resp:
-        raw = json.loads(resp.read().decode("utf-8"))
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _vision_result(raw, model):
     content = raw["choices"][0]["message"]["content"]
     if isinstance(content, list):
         content = "".join(part.get("text", "") for part in content if isinstance(part, dict))
@@ -208,7 +223,7 @@ def _call_vlm(crop, cfg):
     summary = str(parsed.get("summary", "")).strip()[:120] or f"AI 识别为{breed}（{coat}）"
     return {
         "source": "vlm",
-        "model": cfg["vision_model"],
+        "model": model,
         "breed": breed,
         "breed_confidence": confidence,
         "coat": coat,
@@ -221,7 +236,7 @@ def _call_vlm(crop, cfg):
 def classify_cat_crop(crop, *, allow_remote=False, timeout=None):
     """Return structured breed/coat/feature analysis for a cropped cat image."""
     cfg = llm_config()
-    if allow_remote and cfg["enabled"]:
+    if allow_remote and cfg["enabled"] and cfg["vision_model"]:
         try:
             result = _call_vlm(crop, dict(cfg, timeout=min(cfg["timeout"], timeout)) if timeout is not None else cfg)
             if result is not None:

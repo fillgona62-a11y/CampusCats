@@ -73,8 +73,11 @@ function aiProfileCard(ai) {
     ${chips.length ? `<div class="ai-chips">${chips.map(c => `<span>${esc(c)}</span>`).join('')}</div>` : ''}
     ${ai.summary ? `<p class="hint">${esc(ai.summary)}</p>` : ''}</div>`;
 }
-export function capturePage(main, onSuccess, {saveLocal, draft} = {}) {
-    main.innerHTML = `<div class="narrow">${head(saveLocal ? '记录本机草稿' : '记录目击', saveLocal ? '拍照或选图后，照片、地点和备注保存在这台手机。' : '拍一张清楚的照片，先看看校园图鉴里有没有它。')}
+export function capturePage(main, onSuccess, {saveLocal, draft, lookupOnly = false} = {}) {
+    const title = lookupOnly ? '照片查查' : saveLocal ? '拍照记录' : '记录目击';
+    const description = lookupOnly ? '拍照或选图后会联网比对校园图鉴，并查看花色初判。' :
+        saveLocal ? '可将照片存为本机草稿，也可以点「照片查查」联网比对。' : '拍一张清楚的照片，先看看校园图鉴里有没有它。';
+    main.innerHTML = `<div class="narrow">${head(title, description)}
     <section class="surface"><h2>拍摄或选取照片</h2><p>尽量让脸部或侧身花纹入镜。同框时，可以在照片上把每只猫分别框出来。</p>
     <div class="actions"><button type="button" class="btn" id="live-start">${icon('camera')}打开相机</button><button type="button" class="btn light" id="choose">${icon('image')}从相册选取</button></div>
     <input id="file" type="file" accept="image/*" hidden><input id="native" type="file" accept="image/*" capture="environment" hidden>
@@ -84,10 +87,10 @@ export function capturePage(main, onSuccess, {saveLocal, draft} = {}) {
     <div class="mark-tools"><button type="button" class="btn light" id="mark-toggle" aria-pressed="false" aria-controls="stage">框选同框猫</button><button type="button" class="btn ghost" id="undo" hidden>撤销上一框</button></div>
     <p id="mark-help" class="hint" aria-live="polite"></p>
     <div class="capture-stage"><div class="target-stage" id="stage" aria-describedby="mark-help"><img id="preview" alt="本次目击照片" draggable="false"><div class="mark-layer" id="marks"></div></div></div>
-    <div class="advice" id="quality" role="status"></div><label class="hint" id="cloud-option" hidden><input name="cloud_photo" type="checkbox"> 允许本次查图将所选画面发送给配置的视觉模型</label><button type="button" class="btn light" id="identify">${icon('search')}查一查图鉴（查重 + 识品种）</button>
-    <div id="results" aria-live="polite"></div><hr class="divider"><h2>保存这次目击</h2><label class="field"><span>校园区域</span><input name="area" required maxlength="60" placeholder="例如，图书馆周边"></label>
+    <div class="advice" id="quality" role="status"></div><label class="hint" id="cloud-option" hidden><input name="cloud_photo" type="checkbox"> 允许本次查图将所选画面发送给配置的视觉模型</label><button type="button" class="btn light" id="identify">${icon('search')}照片查查 · 查重与花色识别</button>
+    <p id="lookup-status" role="status" class="hint"></p><div id="results" aria-live="polite"></div><div id="record-fields" ${lookupOnly ? 'hidden inert' : ''}><hr class="divider"><h2>保存这次目击</h2><label class="field"><span>校园区域</span><input name="area" required maxlength="60" placeholder="例如，图书馆周边"></label>
     <label class="field"><span>目击时间</span><input type="datetime-local" name="observed" required></label>
-    <label class="field"><span>观察备注（选填）</span><textarea name="note" maxlength="800" rows="2" placeholder="例如，左前腿有一处橘色斑纹"></textarea></label><label class="hint"><input type="checkbox" name="automatic" checked> 允许自动关联已建档的猫</label><p class="hint">脸部特征充分吻合时自动记录重遇，其余目击待辨认。</p><p class="form-error" role="alert"></p><button type="submit" class="btn">${icon('book')}提交目击</button></form></div>`;
+    <label class="field"><span>观察备注（选填）</span><textarea name="note" maxlength="800" rows="2" placeholder="例如，左前腿有一处橘色斑纹"></textarea></label><label class="hint"><input type="checkbox" name="automatic" checked> 允许自动关联已建档的猫</label><p class="hint">脸部特征充分吻合时自动记录重遇，其余目击待辨认。</p><p class="form-error" role="alert"></p><button type="submit" class="btn">${icon('book')}提交目击</button></div></form></div>`;
     const $ = selector => main.querySelector(selector), form = $('#capture-form'), stage = $('#stage'), marks = $('#marks'), video = $('#viewfinder');
     const now = new Date();
     form.elements.observed.value = new Date(now - now.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
@@ -129,6 +132,8 @@ export function capturePage(main, onSuccess, {saveLocal, draft} = {}) {
         requestId = newRequestId();
         suggestions = [];
         $('#results').replaceChildren();
+        $('#identify').disabled = false;
+        $('#lookup-status').textContent = '';
         setDrawing(false);
         $('#quality').textContent = targets().map((box, i) => `猫 ${i + 1} · ${qualityHints(frame, box).join(' ') || '画面初检通过，可对照脸部和侧身花纹。'}`).join('　');
     }
@@ -149,9 +154,9 @@ export function capturePage(main, onSuccess, {saveLocal, draft} = {}) {
     }
     function previewResults(data) {
         suggestions = Array(data.results.length).fill(null);
-        $('#results').innerHTML = `<hr class="divider"><h2>查图与识别结果</h2><p>${data.reference_count ? '已比对校园图鉴参考库并完成品种/花色初判。请选择有把握的档案，或保留待辨认。' : '图鉴还没有可比对的参考照。提交目击后，维护者可以为第一只猫建档。'}</p>` + data.results.map((r, i) => {
+        $('#results').innerHTML = `<hr class="divider"><h2>查图与识别结果</h2><p>${data.reference_count ? '已比对图鉴参考照，可查看每只猫的候选档案。' : '图鉴还没有可比对的参考照。提交目击后，维护者可以为第一只猫建档。'}</p>` + data.results.map((r, i) => {
             const cats = r.candidates || [], warnings = r.warnings || r.quality || [];
-            return `<section class="sheet"><h3>猫 ${i + 1}</h3>${recordBadge(r.record_status)}${aiProfileCard(r.ai_profile)}${r.breed_hint?.label ? `<p class="advice">图鉴相似档案的品种线索（待核实） · ${esc(r.breed_hint.label)}。至少两只相似候选的档案记有该品种，仍需核对这只猫的来源。</p>` : ''}<div class="compare"><figure>${img(cropData(frame, r.box), '本次取景')}<figcaption>本次取景</figcaption></figure>${cats[0] ? `<figure id="ref-${i}">${img(cats[0].photo_url, cats[0].name)}<figcaption>${refCaption(cats[0])}</figcaption></figure>` : ''}</div>${warnings.length ? `<p class="advice">${esc(warnings.join(' '))}</p>` : ''}${cats.length ? `<label class="field"><span>对照候选参考照</span><select data-ref="${i}">${cats.map((cat, j) => `<option value="${j}">${esc(cat.name)} · ${esc(cat.coat || '花色待补')}${typeof cat.similarity === 'number' ? `（约 ${Math.round(cat.similarity * 100)}%）` : ''}</option>`).join('')}</select></label><div class="actions"><button type="button" class="btn light" data-pick="${i}">建议匹配当前候选</button><button type="button" class="btn ghost" data-clear="${i}">暂时认不出</button></div>` : '<p class="hint">目前没有可用候选，可以提交为待辨认。</p>'}<p class="hint" id="selection-${i}">提交意向 · 待辨认</p></section>`;
+            return `<section class="sheet"><h3>猫 ${i + 1}</h3>${recordBadge(r.record_status)}${aiProfileCard(r.ai_profile)}${r.breed_hint?.label ? `<p class="advice">图鉴相似档案的品种线索（待核实） · ${esc(r.breed_hint.label)}。至少两只相似候选的档案记有该品种，仍需核对这只猫的来源。</p>` : ''}<div class="compare"><figure>${img(cropData(frame, r.box), '本次取景')}<figcaption>本次取景</figcaption></figure>${cats[0] ? `<figure id="ref-${i}">${img(cats[0].photo_url, cats[0].name)}<figcaption>${refCaption(cats[0])}</figcaption></figure>` : ''}</div>${warnings.length ? `<p class="advice">${esc(warnings.join(' '))}</p>` : ''}${cats.length ? `<label class="field"><span>对照候选参考照</span><select data-ref="${i}">${cats.map((cat, j) => `<option value="${j}">${esc(cat.name)} · ${esc(cat.coat || '花色待补')}${typeof cat.similarity === 'number' ? `（约 ${Math.round(cat.similarity * 100)}%）` : ''}</option>`).join('')}</select></label><div class="actions" ${lookupOnly || saveLocal ? 'hidden' : ''}><button type="button" class="btn light" data-pick="${i}">建议匹配当前候选</button><button type="button" class="btn ghost" data-clear="${i}">暂时认不出</button></div>` : '<p class="hint">目前没有可用候选。</p>'}<p class="hint" id="selection-${i}" ${lookupOnly || saveLocal ? 'hidden' : ''}>提交意向 · 待辨认</p></section>`;
         }).join('');
         $('#results').querySelectorAll('[data-ref]').forEach(select => select.onchange = () => {
             const index = Number(select.dataset.ref), cat = data.results[index].candidates[Number(select.value)];
@@ -177,22 +182,35 @@ export function capturePage(main, onSuccess, {saveLocal, draft} = {}) {
     async function identify() {
         const version = revision;
         const area = form.elements.area.value.trim();
-        const result = await api('/identify', { photo, boxes: targets(), area, cloud_photo: form.elements.cloud_photo.checked });
-        if (!disposed && version === revision) {
+        const payload = { photo, boxes: targets(), area, cloud_photo: form.elements.cloud_photo.checked };
+        const feedback = $('#lookup-status');
+        const trigger = $('#identify');
+        trigger.disabled = true;
+        feedback.textContent = '正在比对校园图鉴…';
+        try {
+            const result = lookupOnly || saveLocal
+                ? (await api('/agent/chat', { ...payload, message: '查看在库记录与花色。' })).identification
+                : await api('/identify', payload);
+            if (disposed || version !== revision) return;
+            if (!result?.results?.length) throw new Error('未取得识别结果，请再查一次。');
             previewResults(result);
+            feedback.textContent = '';
+        } catch (error) {
+            if (!disposed && version === revision) feedback.textContent = error.message;
+        } finally {
+            if (!disposed && version === revision) trigger.disabled = false;
         }
     }
     if (saveLocal) {
-        $('#identify').hidden = true;
         form.elements.automatic.closest('label').hidden = true;
         form.elements.automatic.closest('label').nextElementSibling.hidden = true;
         form.querySelector('[type=submit]').textContent = '保存到本机';
         $('#shutter').textContent = '拍下照片';
     }
-    if (!saveLocal) api('/agent/status').then(status => {
+    api('/agent/status').then(status => {
         if (!disposed) $('#cloud-option').hidden = status.vision_mode !== 'vlm';
     }).catch(() => {});
-    $('#identify').onclick = e => busy(e.currentTarget, identify);
+    $('#identify').onclick = identify;
     const point = e => {
         const r = stage.getBoundingClientRect();
         return [Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)), Math.min(1, Math.max(0, (e.clientY - r.top) / r.height))];
@@ -247,7 +265,7 @@ export function capturePage(main, onSuccess, {saveLocal, draft} = {}) {
                 await image.decode();
                 if (!disposed && version === fileVersion) {
                     useFrame(bitmapFrame(image, image.naturalWidth, image.naturalHeight));
-                    if (!saveLocal) await busy($('#identify'), identify);
+                    if (!saveLocal) await identify();
                 }
             }
             catch {
@@ -304,7 +322,7 @@ export function capturePage(main, onSuccess, {saveLocal, draft} = {}) {
         fileVersion++;
         useFrame(bitmapFrame(video, video.videoWidth, video.videoHeight));
         stopCamera();
-        if (!saveLocal) await busy($('#identify'), identify);
+        if (!saveLocal) await identify();
     };
     form.oninput = e => {
         if (e.target.name)
@@ -312,6 +330,7 @@ export function capturePage(main, onSuccess, {saveLocal, draft} = {}) {
     };
     form.onsubmit = e => {
         e.preventDefault();
+        if (lookupOnly) return;
         const submit = form.querySelector('[type=submit]');
         busy(submit, async () => {
             const observed = new Date(form.elements.observed.value);

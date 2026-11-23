@@ -138,6 +138,36 @@ class UpgradeFeatureTests(unittest.TestCase):
         self.assertIsNone(r2["record_status"]["recorded"])
         self.assertIn("奶牛", r2["ai_profile"]["coat"])
 
+    def test_provider_scope_credentials_and_real_chat_routing(self):
+        path = "/api/agent/settings"
+        shared = dict(scope="shared", action="save", protocol="tools", base_url="https://campus.example/v1",
+                      chat_model="campus-model", api_key="campus-test-key")
+        personal = dict(shared, scope="personal", protocol="chat", base_url="https://personal.example/v1",
+                        chat_model="my-agent", api_key="personal-test-key")
+        self.call(path, shared, expected=401)
+        self.call(path, shared, self.member, expected=403)
+        self.call(path, shared, self.reviewer)
+        self.call(path, personal, self.member)
+        visible = self.call(path, cookie=self.member)[0]
+        self.assertEqual(set(visible), {"personal"})
+        self.assertNotIn("api_key", visible["personal"])
+        self.call(path, dict(personal, base_url="https://other.example/v1", api_key=""), self.member, expected=400)
+        def provider(cfg, payload):
+            self.assertEqual(payload["model"], cfg.get("chat_model", payload["model"]))
+            return {"choices":[{"message":{"content":payload["model"]}}]}
+        with mock.patch("providers.completion", side_effect=provider) as outbound:
+            self.call(path, dict(personal, action="test", api_key=""), self.member)
+            for cookie, want, key in (("", "campus-model", "campus-test-key"),
+                                      (self.member, "my-agent", "personal-test-key"),
+                                      (self.reviewer, "campus-model", "campus-test-key")):
+                reply = self.call("/api/agent/chat", {"message":"全校有几只猫？"}, cookie)[0]
+                self.assertEqual((reply["mode"], reply["reply"]), ("llm", want))
+                cfg, payload = outbound.call_args.args
+                self.assertEqual(cfg["api_key"], key)
+                self.assertEqual("tools" in payload, want == "campus-model")
+        self.call(path, dict(scope="personal", action="remove"), self.member)
+        self.assertEqual(self.call("/api/agent/status", cookie=self.member)[0]["chat_model"], "campus-model")
+
     def test_vlm_breed_recognition_with_mocked_api(self):
         fake_vlm = {
             "choices": [

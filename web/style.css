@@ -1565,6 +1565,14 @@ html.chat-open { overflow:hidden; }
 }
 
 .field-home { max-width:960px; margin:auto; }
+.home-agent { display:flex; align-items:center; justify-content:space-between; gap:6px; margin-top:8px; border:1px solid var(--line); background:var(--card); border-radius:12px; padding:2px 12px; }
+.home-agent button,.home-agent a { display:inline-flex; gap:8px; align-items:center; min-height:46px; padding:0 4px; border:0; background:none; color:var(--deep); font:inherit; text-decoration:none; }
+.home-agent button { font-weight:700; }
+#assistant-settings { color:inherit; margin-left:auto; padding:9px; font-size:14px; }
+.provider-fields { min-width:0; padding:0; border:0; margin:0; }
+.photo-lookup { display:flex; align-items:center; gap:10px; padding:14px 16px; margin-top:12px; border:1px solid var(--line); border-radius:12px; background:var(--card); text-decoration:none; }
+.photo-lookup span { font-size:14px; color:var(--muted); }
+.photo-lookup>.icon:last-child { margin-left:auto; }
 .field-cover {
   position:relative;
   isolation:isolate;

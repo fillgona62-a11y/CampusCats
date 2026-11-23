@@ -110,3 +110,11 @@ CREATE TABLE IF NOT EXISTS audit (
     reason TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS agent_providers (
+  owner INTEGER PRIMARY KEY,
+  base_url TEXT NOT NULL,
+  chat_model TEXT NOT NULL,
+  vision_model TEXT NOT NULL,
+  protocol TEXT NOT NULL,
+  secret BLOB NOT NULL
+);
