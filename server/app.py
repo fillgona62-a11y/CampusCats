@@ -16,6 +16,7 @@ from urllib.parse import urlsplit
 from wsgiref.simple_server import WSGIServer, make_server
 
 import accounts
+import surveys
 from catalog import (SIGHTING_QUERY, audit, catalog, connect, encounter_receipt, field, identify, integer, one, personal_album,
                      reunions, review_breed, review_identity, revision, serialize, similar_pending, stats, upload)
 from media import Problem
@@ -72,6 +73,7 @@ def delete_account(db, media_dir, uid, body):
         "JOIN frames f ON f.id=s.frame_id WHERE f.user_id=? UNION SELECT t.image FROM thumbnails t "
         "JOIN sightings s ON s.id=t.sighting_id JOIN frames f ON f.id=s.frame_id WHERE f.user_id=?", (uid,uid,uid))]
     db.execute("DELETE FROM sessions WHERE user_id=?",(uid,))
+    db.execute("DELETE FROM spot_checks WHERE user_id=?",(uid,))
     db.execute("DELETE FROM sightings WHERE frame_id IN (SELECT id FROM frames WHERE user_id=?)",(uid,))
     db.execute("DELETE FROM frames WHERE user_id=?",(uid,))
     db.execute("DELETE FROM aliases WHERE submitter=?",(uid,))
@@ -183,6 +185,8 @@ class App:
     def get(self, db, path, user):
         if path == "/api/session":
             return {"user":user}
+        if path == "/api/surveys":
+            return surveys.board(db, user["id"] if user else None)
         if path == "/api/home":
             cats = catalog(db)
             return {"stats":stats(db,cats),"cats":list(cats.values())}
@@ -230,6 +234,11 @@ class App:
         if is_photo:
             accounts.throttle(db,f"photo:{uid}",180,3600)
         body = read_json(env,9*1024*1024 if is_photo else 16384)
+        if path == "/api/surveys/start":
+            return surveys.start(db, uid, body)
+        match = re.fullmatch(r"/api/surveys/(\d{1,18})/(finish|withdraw)", path)
+        if match:
+            return surveys.update(db, uid, int(match[1]), match[2], body)
         if path == "/api/logout":
             db.execute("DELETE FROM sessions WHERE token=?",(accounts.digest(accounts.session_token(env)),))
             headers.append(accounts.cookie("",self.secure))

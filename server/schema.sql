@@ -53,6 +53,19 @@ CREATE TABLE IF NOT EXISTS sightings (
 CREATE INDEX IF NOT EXISTS sightings_by_cat ON sightings(cat_id);
 CREATE INDEX IF NOT EXISTS sightings_by_status ON sightings(status);
 CREATE INDEX IF NOT EXISTS frames_by_owner ON frames(user_id,observed_at);
+CREATE TABLE IF NOT EXISTS spot_checks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users,
+    request_id TEXT NOT NULL,
+    area TEXT NOT NULL,
+    started INTEGER NOT NULL,
+    state TEXT NOT NULL CHECK(state IN ('active','done','withdrawn')),
+    peak INTEGER CHECK(peak BETWEEN 0 AND 999),
+    CHECK((state='done')=(peak IS NOT NULL)),
+    UNIQUE(user_id,request_id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS one_active_check ON spot_checks(user_id) WHERE state='active';
+CREATE INDEX IF NOT EXISTS completed_checks_by_time ON spot_checks(started,area) WHERE state='done';
 CREATE TABLE IF NOT EXISTS thumbnails (
     sighting_id INTEGER PRIMARY KEY REFERENCES sightings(id) ON DELETE CASCADE,
     image TEXT NOT NULL

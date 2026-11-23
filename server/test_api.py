@@ -4,6 +4,7 @@ import io
 import json
 import tempfile
 import unittest
+from unittest.mock import patch
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
@@ -178,6 +179,49 @@ class CatalogFlow(unittest.TestCase):
         self.call(f"/api/review/{second['id']}", {"action":"reject","reason":"无有效特征"}, self.reviewer)
         self.assertEqual(self.call(album, cookie=self.member)[0]["pending"], 1)
         self.assertEqual(view()[1]["status"], "rejected")
+
+    @patch("surveys.time")
+    def test_spot_checks_count_effort_and_zero_across_campus_weeks(self, clock):
+        monday = int(datetime.fromisoformat("2025-03-03T00:00:00+08:00").timestamp())
+        board = lambda cookie="": self.call("/api/surveys",cookie=cookie)[0]
+        path = "/api/surveys/start"
+        payload = {"area":"图书馆","request_id":"previous"}
+        self.call(path,payload,expected=401)
+        clock.time.return_value = monday-600
+        sid = self.call(path,payload,self.member)[0]["id"]
+        self.assertEqual(self.call(path,payload,self.member)[0]["id"],sid)
+        self.call(path,dict(payload,request_id="parallel"),self.member,409)
+        self.assertEqual(board(self.member)["active"]["id"],sid)
+        self.assertIsNone(board()["active"])
+        finish = f"/api/surveys/{sid}/finish"
+        clock.time.return_value = monday-1
+        self.call(finish,{"peak":0},self.member,409)
+        clock.time.return_value = monday
+        self.call(finish,{"peak":0},self.reviewer,404)
+        self.call(finish,{"peak":0},self.member)
+        self.call(finish,{"peak":0},self.member)
+        self.call(finish,{"peak":1},self.member,409)
+        self.assertEqual(board()["areas"],[{"area":"图书馆","visits":0,"seen":0,"peak":None,
+                                            "previous_visits":1,"previous_seen":0}])
+
+        for i,count in enumerate([0,3]):
+            current = self.call(path,dict(payload,request_id=str(i)),self.member)[0]["id"]
+            clock.time.return_value += 600
+            endpoint = f"/api/surveys/{current}/finish"
+            for invalid in [None,-1,False,1.2]:
+                self.call(endpoint,{"peak":invalid},self.member,400)
+            self.call(endpoint,{"peak":count},self.member)
+        area = board()["areas"][0]
+        self.assertEqual((area["visits"],area["seen"],area["peak"]),(2,1,3))
+        self.assertEqual(board()["recent"],[])
+        self.assertEqual(len(board(self.member)["recent"]),3)
+        self.call(f"/api/surveys/{current}/withdraw",{},self.reviewer,404)
+        self.call(f"/api/surveys/{current}/withdraw",{},self.member)
+        area = board()["areas"][0]
+        self.assertEqual((area["visits"],area["seen"],area["peak"]),(1,0,0))
+        self.assertEqual(self.call("/api/home")[0]["stats"]["cats"],0)
+        self.call("/api/account/delete",{"password":"testpass-123"},self.member)
+        self.assertEqual(board()["areas"],[])
 
     def test_sessions_recover_and_validation(self):
         credentials = {"email":"lost@example.edu","password":"first-password","nickname":"小林"}

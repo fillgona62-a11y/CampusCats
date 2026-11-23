@@ -1,6 +1,6 @@
 // Only the public application shell is available offline. Never cache API responses or observations.
-const cacheName = "campuscats-shell-v3";
-const shell = ["/", "/app.js", "/ui.js", "/capture.js", "/review.js", "/album.js", "/style.css",
+const cacheName = "campuscats-shell-v4";
+const shell = ["/", "/app.js", "/ui.js", "/capture.js", "/review.js", "/album.js", "/surveys.js", "/style.css",
   "/manifest.webmanifest", "/assets/field-cat.jpg", "/assets/icon-192.png", "/assets/icon-512.png"];
 self.addEventListener("install", event => {
   event.waitUntil(caches.open(cacheName).then(cache => cache.addAll(shell)));

@@ -1,6 +1,7 @@
 import { api, back, btn, busy, card, date, empty, esc, formValues, head, icon, img, notice, status } from './ui.js';
 import { capturePage } from './capture.js';
 import { albumPage, encounterPage } from './album.js';
+import { surveyPage } from './surveys.js';
 import { reviewPage, bindBreed } from './review.js';
 const main = document.getElementById('content');
 let serial = 0, clean = null, session = null, recoveryCode = '', lastFilter = '', filterArea = '';
@@ -23,6 +24,7 @@ function home(data) {
     main.innerHTML = `<section class="hero"><div class="hero-copy"><h1>校园猫图鉴</h1><p>拍下校园里的猫，用花纹认出老朋友，记下每一次相遇。</p><div class="actions">${btn('#capture', '记录一次目击', 'camera', 'lime')}<a class="hero-album" href="#album">${icon('book')} 我的猫册</a></div></div>
     <figure class="hero-photo">${img('/assets/field-cat.jpg', '校园猫图鉴封面摄影', 'fetchpriority="high"')}<figcaption>封面摄影</figcaption></figure></section>
     <section class="stats" aria-label="校园猫数量统计">${[['cat', stats.cats, '只', '累计已建档'], ['time', stats.active, '只', '近 30 天有目击'], ['focus', stats.pending, '条', '待辨认记录']].map(([symbol, n, unit, label]) => `<div class="stat">${icon(symbol)}<div><strong>${Number(n)}<i>${unit}</i></strong><span>${label}</span></div></div>`).join('')}</section>
+    <a href="#surveys" class="album-shortcut">${icon('pin')}<div><strong>校园定点观察</strong><small>查看本周哪些区域还缺观察，或参加一次十分钟记录。</small></div>${icon('arrow')}</a>
     <div class="section-head"><h2>最近目击的猫</h2><a href="#atlas">查看图鉴 ${icon('arrow')}</a></div>
     <div class="home-grid">${data.cats.length ? `<div class="gallery">${data.cats.slice(0, 3).map(card).join('')}</div>` : empty('cat', '第一只校园猫会是谁？', '拍下你遇见的猫。身份核实后，它就会出现在校园图鉴里。', btn('#capture', '提交第一条目击', 'camera', 'light'))}
     <a href="#guide" class="guide-tile"><span class="tile-icon">${icon('focus')}</span>${icon('arrow')}<div><h3>拍摄指南</h3><p>拍清花纹，也给辨认留下线索。</p></div></a></div>`;
@@ -90,7 +92,7 @@ function catPage({ cat, sightings }) {
     });
 }
 function auth(mode, requested = 'me') {
-    const target = /^(home|atlas|capture|me|review|album|cat\/\d{1,18}|encounter\/\d{1,18}(?:\/\d{1,18})?)$/.test(requested) ? requested : 'me';
+    const target = /^(home|atlas|capture|me|review|album|surveys|cat\/\d{1,18}|encounter\/\d{1,18}(?:\/\d{1,18})?)$/.test(requested) ? requested : 'me';
     const create = mode === 'register', recover = mode === 'recover';
     const title = recover ? '找回密码' : create ? '创建观察账号' : '登录猫迹';
     main.innerHTML = `<div class="tiny">${back('#home', '返回首页')}${head(title, create ? '注册后可以提交目击，收集自己的重遇卡片。' : '')}<form class="surface" id="auth">${recover ? '' : `<div class="seg"><a class="${!create ? 'active' : ''}" href="#login/${target}">登录</a><a class="${create ? 'active' : ''}" href="#register/${target}">注册</a></div>`}
@@ -161,6 +163,7 @@ function me(data) {
     main.innerHTML = `<div class="narrow">${head('我的手记', `${user.nickname} · ${user.email}`, `<button class="btn light" id="logout">退出登录</button>`)}
  ${user.role === 'reviewer' ? btn('#review', '进入维护工作台', 'review', 'light') : ''}
  <a class="album-shortcut" href="#album">${icon('book')}<div><strong>我的猫册</strong><small>按校园区域翻看你遇见的猫</small></div>${icon('arrow')}</a>
+ ${btn('#surveys', '继续定点观察或查看周报', 'pin', 'light')}
  <div class="section-head"><h2>重遇卡片</h2></div>${reunions.length ? reunions.map((r, i) => `<article class="recap"><h2>${esc(r.cat_name)} <span>相隔 ${Number(r.days)} 天</span></h2><div class="compare">${[[r.first_photo_url, r.first_at, '初次目击'], [r.last_photo_url, r.last_at, '最近目击']].map(([url, when, title]) => `<figure>${img(url, title, 'loading="lazy"')}<figcaption>${title} · ${esc(date(when))}</figcaption></figure>`).join('')}</div><button type="button" class="btn light" data-export="${i}">生成可保存卡片</button><div class="export-result"></div></article>`).join('') : empty('time', '下一次相遇，会留下对照', '再次记录同一只猫并确认身份后，就能在这里看到两次目击的照片。')}
  <div class="section-head"><h2>我的目击</h2><span>${sightings.length} 条</span></div><div class="stack">${sightings.length ? sightings.map(entry).join('') : empty('camera', '还没有目击记录', '在校园偶遇一只猫时，拍下一张照片。', btn('#capture', '记录目击', 'camera'))}</div>
  <details class="surface"><summary>账号管理</summary><form id="delete-account"><p>注销后将撤回你的目击、照片及由此产生的公开记录。请确认需要注销，再输入当前密码。</p><label class="field"><span>当前密码</span><input name="password" type="password" required autocomplete="current-password"></label><p class="form-error"></p><button class="btn light" type="submit">确认注销账号</button></form></details></div>`;
@@ -215,6 +218,11 @@ async function route() {
         }
         if (page === 'me') {
             me(personal);
+            return;
+        }
+        if (page === 'surveys') {
+            const data = await api('/surveys');
+            if (version === serial) clean = surveyPage(main, data, session, route);
             return;
         }
         if (page === 'album') {

@@ -110,6 +110,13 @@
 .encounter-card h2 {margin:3px 0 8px;}
 .encounter-card p {color:var(--muted);}
 .receipt-actions {margin:20px 0;}
+.surface .survey-clock {font-size:2rem;line-height:1.3;font-variant-numeric:tabular-nums;color:var(--deep);}
+.survey-withdraw {margin-top:1em;}
+.survey-area {display:flex;align-items:baseline;justify-content:space-between;gap:1em;padding:.8em 0;overflow-wrap:anywhere;}
+.survey-area + .survey-area {border-top:1px solid var(--line);}
+.survey-area h3,.survey-area p {margin:0;}
+.survey-area small,.survey-area p {color:var(--muted);font-size:.85rem;}
+@media(max-width:500px) {.survey-area {display:block;}.survey-area h3 {margin-bottom:.35em;}}
 .souvenir-image {display:block;width:100%;max-width:370px;margin:16px 0 8px;}
 .souvenir .hint {display:block;}
 @media(max-width:620px) {
