@@ -31,8 +31,17 @@ export function head(title, sub = '', action = '') {
 export function back(href, label) {
     return `<a class="back" href="${esc(href)}">${icon('arrow')}${esc(label)}</a>`;
 }
+function emptyIllustration(symbol) {
+    if (symbol === 'search' || symbol === 'focus') {
+        return `<svg class="empty-art" viewBox="0 0 96 72" aria-hidden="true"><circle cx="42" cy="34" r="18" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M55 47l14 14" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/><path d="M34 32l3-8 5 4h2l5-4 3 8" fill="none" stroke="var(--ginger)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="38" cy="36" r="1.4" fill="currentColor"/><circle cx="46" cy="36" r="1.4" fill="currentColor"/></svg>`;
+    }
+    if (symbol === 'book' || symbol === 'time') {
+        return `<svg class="empty-art" viewBox="0 0 96 72" aria-hidden="true"><rect x="18" y="14" width="60" height="44" rx="8" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M48 16v40" stroke="currentColor" stroke-width="1.6" stroke-dasharray="3 3"/><path d="M27 36c3-6 9-6 12 0M57 38c4-5 10-5 13 0" fill="none" stroke="var(--ginger)" stroke-width="2" stroke-linecap="round"/><circle cx="33" cy="27" r="3" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>`;
+    }
+    return `<svg class="empty-art" viewBox="0 0 96 72" aria-hidden="true"><path d="M22 50c0-13 10-22 26-22s26 9 26 22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><path d="M30 33l-2-11 9 6M66 33l2-11-9 6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M39 41q3 3 6 0M51 41q3 3 6 0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M72 48c7 0 11-5 8-11" fill="none" stroke="var(--ginger)" stroke-width="2.2" stroke-linecap="round"/><path d="M16 54h64" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" opacity=".35"/></svg>`;
+}
 export function empty(symbol, title, desc, action = '') {
-    return `<section class="empty"><span class="empty-emblem">${icon(symbol)}</span><h3>${esc(title)}</h3><p>${esc(desc)}</p>${action}</section>`;
+    return `<section class="empty">${emptyIllustration(symbol)}<h3>${esc(title)}</h3><p>${esc(desc)}</p>${action}</section>`;
 }
 export function date(value) {
     if (!value)
@@ -118,7 +127,8 @@ export function catSearchText(cat) {
 }
 
 export function card(cat) {
-    return `<a class="cat-card" href="#cat/${Number(cat.id)}">${img(cat.thumbnail_url || cat.photo_url, cat.name, 'loading="lazy"')}<div class="card-body"><h3>${esc(cat.name)}</h3><p>${esc(cat.coat || '花色待补')} · ${Number(cat.sightings)} 次目击</p>${catTags(cat)}<p class="meta">${icon('pin')}${esc(cat.area || '区域待补')}</p></div></a>`;
+    const badges = catTags(cat);
+    return `<a class="cat-card" href="#cat/${Number(cat.id)}"><div class="card-media">${img(cat.thumbnail_url || cat.photo_url, cat.name, 'loading="lazy"')}${badges ? `<div class="card-badges">${badges}</div>` : ''}<div class="card-overlay"><h3>${esc(cat.name)}</h3><p class="card-sub">${esc(cat.coat || '花色待补')} · <strong>${Number(cat.sightings)}</strong> 次目击</p><p class="meta">${icon('pin')}${esc(cat.area || '区域待补')}</p></div></div></a>`;
 }
 export function candidates(s) {
     return (s.candidates || []).length ? `<p class="hint">按框内花色、明暗和纹理列出相似档案，仍需核对脸部和四肢的花纹。</p><div class="gallery">${s.candidates.map(card).join('')}</div>` : `<p class="hint">暂无可比对的候选。可以保留待辨认，等有清晰照片再核对。</p>`;

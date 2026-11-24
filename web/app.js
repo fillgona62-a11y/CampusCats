@@ -46,18 +46,24 @@ function home(data = null, unavailable = false) {
     const capture = installedAndroid && (!data || !session) ? '#device-capture' : '#capture';
     const shortcuts = [['album','book','我的猫册'], ['surveys','pin','定点观察'], ['guide','focus','拍摄指南']];
     if (installedAndroid) shortcuts.unshift(['device','image','本机草稿']);
+    const allZero = data && Number(data.stats.cats) === 0 && Number(data.stats.active) === 0 && Number(data.stats.pending) === 0;
+    const statsBlock = allZero
+        ? `<div class="field-welcome"><strong>图鉴刚刚开张</strong><span>等你拍下校园里的第一只猫</span></div>`
+        : `<dl class="field-counts" aria-label="校园目击统计">${[['cats','已建档','只'],['active','近30天见过','只'],['pending','待辨认','条']].map(([key,label,unit]) => `<div><dt>${label}</dt><dd>${data ? Number(data.stats[key]) : '—'}<small>${unit}</small></dd></div>`).join('')}</dl>`;
     main.innerHTML = `<div class="field-home"><section class="field-cover">
-      <img src="/assets/field-cat.jpg" alt="" fetchpriority="high">
-      <div><h1>校园猫图鉴</h1>${btn(capture, '拍照记录', 'camera', 'cover-action')}</div>
+      <img src="/assets/field-cat.jpg" alt="阳光树荫下趴在校园石阶上的猫" fetchpriority="high">
+      <div><h1>校园猫图鉴</h1><p class="cover-sub">记录每一次校园偶遇，认出每一只老朋友。</p>${btn(capture, '拍照记录', 'camera', 'cover-action')}</div>
     </section>
-    <a class="photo-lookup" href="#lookup">${icon('search')}<strong>照片查查</strong><span>查重 · 识别花色</span>${icon('arrow')}</a>
-    <div class="home-agent"><button type="button" id="home-agent">${icon('cat')} 猫猫助手</button><a href="#agent-settings">接入 Agent ${icon('arrow')}</a></div>
-    <dl class="field-counts" aria-label="校园目击统计">${[['cats','已建档','只'],['active','近30天见过','只'],['pending','待辨认','条']].map(([key,label,unit]) => `<div><dt>${label}</dt><dd>${data ? Number(data.stats[key]) : '—'}<small>${unit}</small></dd></div>`).join('')}</dl>
+    <div class="home-actions-row">
+      <a class="photo-lookup" href="#lookup">${icon('search')}<div><strong>照片查查</strong><span>查重 · 识别花色</span></div>${icon('arrow')}</a>
+      <button type="button" class="home-agent-btn" id="home-agent">${icon('cat')}<div><strong>猫猫助手</strong><span>问找猫 · 查近期目击</span></div>${icon('arrow')}</button>
+    </div>
+    ${statsBlock}
     <section><div class="section-head"><h2>最近目击</h2><a href="#atlas">全部图鉴 ${icon('arrow')}</a></div>
       ${data?.cats.length ? `<div class="gallery">${data.cats.slice(0,3).map(card).join('')}</div>` :
         `<div class="field-empty">${icon('cat')}<div><strong>${data ? '还没有已建档的猫' : unavailable ? '图鉴暂时连不上' : '正在读取图鉴…'}</strong>${data ? '<p>第一只猫建档后，照片就会出现在这里。</p>' : unavailable ? '<button type="button" class="link" id="retry">重新连接</button>' : ''}</div></div>`}
     </section>
-    <div class="field-links">${shortcuts.map(([url,symbol,title]) => `<a href="#${url}">${icon(symbol)}<span>${title}</span>${icon('arrow')}</a>`).join('')}</div>${unavailable ? androidOriginBox() : ''}</div>`;
+    <div class="field-links cols-${shortcuts.length}">${shortcuts.map(([url,symbol,title]) => `<a href="#${url}">${icon(symbol)}<span>${title}</span>${icon('arrow')}</a>`).join('')}</div>${unavailable ? androidOriginBox() : ''}</div>`;
     if (unavailable) {
         main.querySelector('#retry').onclick = route;
         bindAndroidOrigin(main);
@@ -269,6 +275,7 @@ function me(data) {
  <div class="section-head"><h2>重遇卡片</h2></div>${reunions.length ? reunions.map((r, i) => `<article class="recap"><h2>${esc(r.cat_name)} <span>相隔 ${Number(r.days)} 天</span></h2><div class="compare">${[[r.first_photo_url, r.first_at, '初次目击'], [r.last_photo_url, r.last_at, '最近目击']].map(([url, when, title]) => `<figure>${img(url, title, 'loading="lazy"')}<figcaption>${title} · ${esc(date(when))}</figcaption></figure>`).join('')}</div><button type="button" class="btn light" data-export="${i}">生成可保存卡片</button><div class="export-result"></div></article>`).join('') : empty('time', '下一次相遇，会留下对照', '再次记录同一只猫并确认身份后，就能在这里看到两次目击的照片。')}
  <div class="section-head"><h2>我的目击</h2><span>${sightings.length} 条</span></div><div class="stack">${sightings.length ? sightings.map(entry).join('') : empty('camera', '还没有目击记录', '在校园偶遇一只猫时，拍下一张照片。', btn('#capture', '记录目击', 'camera'))}</div>
  ${androidOriginBox()}
+ <details class="surface"><summary>猫猫助手与模型设置</summary><p class="hint">可在此配置你的个人 AI 接口${user.role === 'reviewer' ? '或全校共用的模型服务' : ''}，未设置时默认使用校园图鉴助手。</p><div class="actions">${btn('#agent-settings', '配置 AI 助手接口', 'focus', 'light')}</div></details>
  <details class="surface"><summary>账号管理</summary><form id="delete-account"><p>注销后将撤回你的目击、照片及由此产生的公开记录。请确认需要注销，再输入当前密码。</p><label class="field"><span>当前密码</span><input name="password" type="password" required autocomplete="current-password"></label><p class="form-error"></p><button class="btn light" type="submit">确认注销账号</button></form></details></div>`;
     bindAndroidOrigin(main);
     const out = main.querySelector('#logout');
