@@ -10,10 +10,18 @@ export function reviewPage(main, data, cats, refresh) {
     <details class="pending-peers"><summary>对照其他待辨认照片</summary><div class="peer-list"></div></details>
     <form><label class="field"><span>复核决定</span><select name="action" required><option value="">选择操作</option><option value="match">关联已有档案</option><option value="new">确认为新猫并建档</option><option value="reject">未采纳这条目击</option></select></label>
     <label class="field" data-part="match" hidden><span>对照档案</span><select name="cat_id"><option value="">选择已有档案</option></select></label>
-    <div data-part="new" hidden><label class="field"><span>档案名</span><input name="name" maxlength="50"></label><label class="field"><span>花色或毛长</span><input name="coat" maxlength="60" placeholder="例如，橘白短毛"></label></div>
+    <div data-part="new" hidden><label class="field"><span>档案名</span><input name="name" maxlength="50"></label><label class="field"><span>花色或毛长</span><input name="coat" maxlength="60" placeholder="例如，橘白短毛"></label>
+    <div class="form-grid"><label class="field"><span>性别（选填）</span><select name="sex"><option value="unknown">待确认</option><option value="female">母猫</option><option value="male">公猫</option></select></label>
+    <label class="field"><span>绝育情况（选填）</span><select name="neutered"><option value="unknown">待确认</option><option value="neutered">已绝育（剪耳等）</option><option value="intact">未绝育</option></select></label></div>
+    <label class="field"><span>性格与相处提示（选填）</span><input name="temperament" maxlength="120" placeholder="例如，亲人可摸 / 怕生勿扰 / 护食勿碰"></label></div>
     <label class="field"><span>核对依据</span><textarea name="reason" required maxlength="800" rows="2" placeholder="写明可辨认的花纹、部位或未采纳原因"></textarea></label><p class="form-error" role="alert"></p><button class="btn" type="submit">保存复核决定</button></form></article>`).join('') || empty('review', '暂无待辨认目击', '新的待辨认记录会出现在这里。')}
     <div class="section-head"><h2>待审核别名</h2><span>${data.aliases.length} 个</span></div>
-    ${data.aliases.map(a => `<div class="sheet row" data-alias="${a.id}"><div><strong>${esc(a.name)}</strong><div class="meta">${esc(a.cat_name)}</div></div><div class="actions"><button class="btn light" data-approve="yes">通过</button><button class="btn ghost" data-approve="no">不采纳</button></div></div>`).join('') || empty('book', '暂无待审核别名', '同学提交的新称呼会出现在这里。')}</div>`;
+    ${data.aliases.map(a => `<div class="sheet row" data-alias="${a.id}"><div><strong>${esc(a.name)}</strong><div class="meta">${esc(a.cat_name)}</div></div><div class="actions"><button class="btn light" data-approve="yes">通过</button><button class="btn ghost" data-approve="no">不采纳</button></div></div>`).join('') || empty('book', '暂无待审核别名', '同学提交的新称呼会出现在这里。')}
+    <details class="surface"><summary>维护校园标准区域（${(data.areas?.canonical || []).length} 个）</summary>
+      <p>添加常用校园区域后，同学在记录目击与定点观察时可直接下拉选择，避免同一地点出现多种写法。</p>
+      <div class="area-chips">${(data.areas?.canonical || []).map(a => `<span class="area-chip">${esc(a)} <button type="button" class="btn ghost" data-del-area="${esc(a)}" aria-label="移除 ${esc(a)}">×</button></span>`).join('') || '<span class="hint">尚未设置标准区域。</span>'}</div>
+      <form id="add-canonical-area"><label class="field"><span>新增标准区域</span><input name="name" required maxlength="60" placeholder="例如，图书馆周边 / 一食堂门口"></label><p class="form-error" role="alert"></p><button type="submit" class="btn light">添加标准区域</button></form>
+    </details></div>`;
     main.querySelectorAll('[data-review]').forEach(article => {
         const id = Number(article.dataset.review), current = data.sightings.find(s => s.id === id), form = article.querySelector('form');
         const peers = article.querySelector('.pending-peers');
@@ -56,6 +64,9 @@ export function reviewPage(main, data, cats, refresh) {
                 if (v.action === 'new') {
                     payload.name = v.name.trim();
                     payload.coat = v.coat.trim();
+                    payload.sex = v.sex || 'unknown';
+                    payload.neutered = v.neutered || 'unknown';
+                    payload.temperament = (v.temperament || '').trim();
                     payload.catalog_revision = data.catalog_revision;
                 }
                 if (v.action === 'match')
@@ -69,6 +80,22 @@ export function reviewPage(main, data, cats, refresh) {
     main.querySelectorAll('[data-approve]').forEach(b => b.onclick = () => busy(b, async () => {
         const id = Number(b.closest('[data-alias]').dataset.alias);
         await api(`/aliases/${id}/review`, { approve: b.dataset.approve === 'yes' });
+        await refresh();
+    }));
+    const addArea = main.querySelector('#add-canonical-area');
+    if (addArea) {
+        addArea.onsubmit = e => {
+            e.preventDefault();
+            busy(addArea.querySelector('button'), async () => {
+                await api('/areas', { action: 'add', name: addArea.elements.name.value.trim() });
+                notice('标准区域已添加。');
+                await refresh();
+            }, addArea);
+        };
+    }
+    main.querySelectorAll('[data-del-area]').forEach(b => b.onclick = () => busy(b, async () => {
+        await api('/areas', { action: 'remove', name: b.dataset.delArea });
+        notice('已移除该标准区域。');
         await refresh();
     }));
 }

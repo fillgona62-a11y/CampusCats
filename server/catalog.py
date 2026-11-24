@@ -3,8 +3,9 @@ import hashlib
 import json
 import re
 import sqlite3
+import threading
 import time
-from collections import Counter, defaultdict
+from collections import Counter, OrderedDict, defaultdict
 from datetime import datetime, timedelta, timezone
 
 import ai_vision
@@ -12,12 +13,47 @@ from face_match import automatic_match
 from media import Problem, canonical_photo, prepare, save_media, validate_boxes
 from vision import MODEL_VERSION, analyze_crop, assess_db_match, pixel_box, rank_candidates
 
+SEX_VALUES = ("unknown", "female", "male")
+NEUTERED_VALUES = ("unknown", "neutered", "intact")
+CARE_VALUES = ("school", "attention", "adopted", "memorial")
+_REF_CACHE_LOCK = threading.Lock()
+_REF_CACHE = OrderedDict()
+
 
 def connect(path):
     db = sqlite3.connect(path, timeout=10)
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA foreign_keys=ON")
     return db
+
+
+def migrate(db):
+    """Idempotently add newer columns when opening an existing pilot database."""
+    existing = {row["name"] for row in db.execute("PRAGMA table_info(cats)")}
+    migrations = (
+        ("sex", "TEXT NOT NULL DEFAULT 'unknown' CHECK(sex IN ('unknown','female','male'))"),
+        ("neutered", "TEXT NOT NULL DEFAULT 'unknown' CHECK(neutered IN ('unknown','neutered','intact'))"),
+        ("care_status", "TEXT NOT NULL DEFAULT 'school' CHECK(care_status IN ('school','attention','adopted','memorial'))"),
+        ("temperament", "TEXT NOT NULL DEFAULT ''"),
+        ("cover_sighting_id", "INTEGER DEFAULT NULL"),
+    )
+    for col, spec in migrations:
+        if col not in existing:
+            db.execute(f"ALTER TABLE cats ADD COLUMN {col} {spec}")
+
+
+def choice_field(body, key, allowed, default):
+    if key not in body or body.get(key) is None or body.get(key) == "":
+        return default
+    val = body.get(key)
+    if not isinstance(val, str) or val not in allowed:
+        raise Problem(f"请检查 {key} 选项。")
+    return val
+
+
+def area_field(body, key="area", size=80, *, required=False):
+    raw = field(body, key, size, required=required)
+    return " ".join(raw.split())
 
 
 def iso(value=None):
@@ -52,8 +88,13 @@ def catalog(db):
                  ROW_NUMBER() OVER (PARTITION BY s.cat_id ORDER BY f.observed_at DESC,s.id DESC) AS priority
           FROM sightings s JOIN frames f ON f.id=s.frame_id WHERE s.status='confirmed'
         )
-        SELECT c.id,c.name,c.coat,c.breed,r.id AS sid,r.area,r.observed_at AS last_seen,r.sightings
-        FROM ranked r JOIN cats c ON c.id=r.cat_id WHERE r.priority=1
+        SELECT c.id,c.name,c.coat,c.breed,c.sex,c.neutered,c.care_status,c.temperament,
+               cs.id AS cover_sighting_id,COALESCE(cs.id,r.id) AS sid,
+               r.area,r.observed_at AS last_seen,r.sightings
+        FROM ranked r
+        JOIN cats c ON c.id=r.cat_id
+        LEFT JOIN sightings cs ON cs.id=c.cover_sighting_id AND cs.cat_id=c.id AND cs.status='confirmed'
+        WHERE r.priority=1
         ORDER BY r.observed_at DESC,c.id
     """)
     cats = {}
@@ -87,7 +128,27 @@ SIGHTING_QUERY = """
 """
 
 
+def _ref_cache_key(db):
+    db_list = db.execute("PRAGMA database_list").fetchone()
+    db_file = db_list[2] if db_list else ""
+    if not db_file:
+        return None
+    confirmed, max_sid = db.execute(
+        "SELECT COUNT(*), COALESCE(MAX(id),0) FROM sightings WHERE status='confirmed'"
+    ).fetchone()
+    auto_count = db.execute("SELECT COUNT(*) FROM auto_identity").fetchone()[0]
+    max_audit = db.execute("SELECT COALESCE(MAX(id),0) FROM audit").fetchone()[0]
+    return (db_file, confirmed, max_sid, auto_count, max_audit, MODEL_VERSION)
+
+
 def references(db):
+    cache_key = _ref_cache_key(db)
+    if cache_key is not None:
+        with _REF_CACHE_LOCK:
+            cached = _REF_CACHE.get(cache_key)
+            if cached is not None:
+                _REF_CACHE.move_to_end(cache_key)
+                return list(cached)
     rows = db.execute("""
         SELECT id,cat_id,analysis,box,image,day FROM (
             SELECT s.id,s.cat_id,s.analysis,s.box,f.image,date(f.observed_at,'+8 hours') AS day,
@@ -98,8 +159,14 @@ def references(db):
             AND json_extract(s.analysis,'$.usable')=1 AND json_extract(s.analysis,'$.version')=?
         ) WHERE n<=12
     """, (MODEL_VERSION,))
-    return [(r["cat_id"], dict(json.loads(r["analysis"]), _reference_id=r["id"],
-                              frame=r["image"], box=tuple(json.loads(r["box"])), day=r["day"])) for r in rows]
+    parsed = [(r["cat_id"], dict(json.loads(r["analysis"]), _reference_id=r["id"],
+                                 frame=r["image"], box=tuple(json.loads(r["box"])), day=r["day"])) for r in rows]
+    if cache_key is not None:
+        with _REF_CACHE_LOCK:
+            _REF_CACHE[cache_key] = tuple(parsed)
+            while len(_REF_CACHE) > 6:
+                _REF_CACHE.popitem(last=False)
+    return parsed
 
 
 def matched_profiles(analysis, refs, cats):
@@ -128,7 +195,7 @@ def breed_hint(candidates):
 
 def identify(db, body):
     boxes = validate_boxes(body.get("boxes"))
-    area = field(body, "area", 80) if body.get("area") is not None else ""
+    area = area_field(body, "area", 80) if body.get("area") is not None else ""
     _, image = canonical_photo(body.get("photo"))
     db.execute("BEGIN")
     cats = catalog(db)
@@ -189,7 +256,7 @@ def upload(db, media_dir, uid, body):
     key = field(body, "request_id", 80, required=True)
     if not re.fullmatch(r"[A-Za-z0-9_-]+", key):
         raise Problem("提交编号无效，请重试。")
-    area = field(body, "area", 80, required=True)
+    area = area_field(body, "area", 80, required=True)
     note = field(body, "note", 800)
     boxes = validate_boxes(body.get("boxes"))
     suggestions = body.get("suggested_cat_ids", [None]*len(boxes))
@@ -223,7 +290,8 @@ def upload(db, media_dir, uid, body):
 
     frame_id = previous()
     if frame_id is None:
-        observed_at = observed or iso()
+        for cat_id in selected:
+            one(db, "SELECT 1 FROM sightings WHERE cat_id=? AND status='confirmed'", cat_id)
         ref_revision = revision(db) if automatic else None
         refs = references(db) if automatic else []
         reference_days = defaultdict(set)
@@ -233,40 +301,61 @@ def upload(db, media_dir, uid, body):
         if not any(len(days) >= 2 for days in reference_days.values()):
             refs = []
         filename, targets, media = prepare(body.get("photo"), boxes, verify=bool(refs))
-        matches = []
-        for _, _, _, analysis, features in targets:
-            ranked = rank_candidates(analysis, refs, limit=7) if features is not None else []
-            matches.append(automatic_match(features, ranked, refs, media_dir))
-        proposed = Counter(match[0] for match in matches if match)
-        db.execute("BEGIN IMMEDIATE")
-        frame_id = previous()
-        if frame_id is None:
-            for cat_id in selected:
-                one(db, "SELECT 1 FROM sightings WHERE cat_id=? AND status='confirmed'",cat_id)
-            if db.execute("SELECT 1 FROM frames WHERE image=?", (filename,)).fetchone():
+        if db.execute("SELECT 1 FROM frames WHERE image=?", (filename,)).fetchone():
+            frame_id = previous()
+            if frame_id is None:
                 raise Problem("这张相同的照片已提交过，请使用本次目击的新照片。", 409)
-            frame_id = db.execute("""
-                INSERT INTO frames(user_id,request_id,request_hash,image,area,note,observed_at)
-                VALUES(?,?,?,?,?,?,?)""", (uid, key, fingerprint, filename, area, note, observed or iso())).lastrowid
-            current_refs = set()
-            if proposed and ref_revision == revision(db):
-                current_refs = {ref["_reference_id"] for _, ref in references(db)}
-            for index, ((box, crop, thumb, analysis, _), suggestion, match) in enumerate(zip(targets,suggestions,matches)):
-                record = db.execute("INSERT INTO sightings(frame_id,box,crop,analysis,suggested_cat_id) "
-                                    "VALUES(?,?,?,?,?)",(frame_id,json.dumps(box),crop,json.dumps(analysis),suggestion))
-                db.execute("INSERT INTO thumbnails(sighting_id,image) VALUES(?,?)",(record.lastrowid,thumb))
-                if match:
-                    cat_id, first_reference, second_reference = match
-                    other_suggestions = suggestions[:index] + suggestions[index+1:]
-                    if (suggestion in (None, cat_id) and proposed[cat_id] == 1 and cat_id not in other_suggestions
-                            and {first_reference, second_reference} <= current_refs):
-                        sighting_id = record.lastrowid
-                        db.execute("UPDATE sightings SET status='confirmed',cat_id=? WHERE id=?", (cat_id, sighting_id))
-                        db.execute("INSERT INTO auto_identity VALUES(?,?,?)",
-                                   (sighting_id, first_reference, second_reference))
-                        audit(db, uid, "identity_auto", sighting_id, None, list(match), "两天人工参考照的脸部特征一致")
-            save_media(media_dir, media)
-        db.commit()
+        if frame_id is None:
+            matches = []
+            for _, _, _, analysis, features in targets:
+                ranked = rank_candidates(analysis, refs, limit=7) if features is not None else []
+                matches.append(automatic_match(features, ranked, refs, media_dir))
+            proposed = Counter(match[0] for match in matches if match)
+            # Persist immutable content-addressed blobs before taking SQLite's global writer lock.
+            created = save_media(media_dir, media)
+            try:
+                db.execute("BEGIN IMMEDIATE")
+                frame_id = previous()
+                if frame_id is None:
+                    for cat_id in selected:
+                        one(db, "SELECT 1 FROM sightings WHERE cat_id=? AND status='confirmed'",cat_id)
+                    if db.execute("SELECT 1 FROM frames WHERE image=?", (filename,)).fetchone():
+                        raise Problem("这张相同的照片已提交过，请使用本次目击的新照片。", 409)
+                    frame_id = db.execute("""
+                        INSERT INTO frames(user_id,request_id,request_hash,image,area,note,observed_at)
+                        VALUES(?,?,?,?,?,?,?)""", (uid, key, fingerprint, filename, area, note, observed or iso())).lastrowid
+                    current_refs = set()
+                    if proposed and ref_revision == revision(db):
+                        current_refs = {ref["_reference_id"] for _, ref in references(db)}
+                    for index, ((box, crop, thumb, analysis, _), suggestion, match) in enumerate(zip(targets,suggestions,matches)):
+                        record = db.execute("INSERT INTO sightings(frame_id,box,crop,analysis,suggested_cat_id) "
+                                            "VALUES(?,?,?,?,?)",(frame_id,json.dumps(box),crop,json.dumps(analysis),suggestion))
+                        db.execute("INSERT INTO thumbnails(sighting_id,image) VALUES(?,?)",(record.lastrowid,thumb))
+                        if match:
+                            cat_id, first_reference, second_reference = match
+                            other_suggestions = suggestions[:index] + suggestions[index+1:]
+                            if (suggestion in (None, cat_id) and proposed[cat_id] == 1 and cat_id not in other_suggestions
+                                    and {first_reference, second_reference} <= current_refs):
+                                sighting_id = record.lastrowid
+                                db.execute("UPDATE sightings SET status='confirmed',cat_id=? WHERE id=?", (cat_id, sighting_id))
+                                db.execute("INSERT INTO auto_identity VALUES(?,?,?)",
+                                           (sighting_id, first_reference, second_reference))
+                                audit(db, uid, "identity_auto", sighting_id, None, list(match), "两天人工参考照的脸部特征一致")
+                db.commit()
+            except BaseException:
+                db.rollback()
+                if created:
+                    db.execute("BEGIN IMMEDIATE")
+                    for item in created:
+                        in_use = db.execute(
+                            "SELECT 1 FROM frames WHERE image=? UNION ALL SELECT 1 FROM sightings WHERE crop=? "
+                            "UNION ALL SELECT 1 FROM thumbnails WHERE image=? LIMIT 1",
+                            (item, item, item),
+                        ).fetchone()
+                        if not in_use:
+                            (media_dir / item).unlink(missing_ok=True)
+                    db.commit()
+                raise
     rows = db.execute(SIGHTING_QUERY + " WHERE f.id=? ORDER BY s.id", (frame_id,))
     return {"sightings": serialize(db, rows, private=True)}
 
@@ -311,7 +400,14 @@ def review_identity(db, actor, sid, body):
                 raise Problem("审核期间图鉴已有变动，请刷新后再次比对再建档。",409)
             name = field(body, "name", 60, required=True)
             coat = field(body, "coat", 80)
-            cat_id = db.execute("INSERT INTO cats(name,coat) VALUES(?,?)", (name, coat)).lastrowid
+            sex = choice_field(body, "sex", SEX_VALUES, "unknown")
+            neutered = choice_field(body, "neutered", NEUTERED_VALUES, "unknown")
+            care_status = choice_field(body, "care_status", CARE_VALUES, "school")
+            temperament = field(body, "temperament", 120)
+            cat_id = db.execute(
+                "INSERT INTO cats(name,coat,sex,neutered,care_status,temperament) VALUES(?,?,?,?,?,?)",
+                (name, coat, sex, neutered, care_status, temperament),
+            ).lastrowid
         elif action == "match":
             cat_id = one(db, "SELECT id FROM cats WHERE id=?", integer(body.get("cat_id")))["id"]
             if db.execute("SELECT 1 FROM sightings WHERE frame_id=? AND cat_id=?", (row["frame_id"],cat_id)).fetchone():
@@ -340,6 +436,151 @@ def review_breed(db, actor, cat_id, body):
     db.execute("UPDATE cats SET breed=?,evidence=? WHERE id=?", (breed, evidence if breed else "", cat_id))
     audit(db, actor, "breed", cat_id, dict(row), {"breed":breed,"evidence":evidence}, evidence or "撤回认证")
     return {"ok": True}
+
+
+def update_cat_profile(db, actor, cat_id, body):
+    reason = field(body, "reason", 400) or "更新档案信息"
+    db.execute("BEGIN IMMEDIATE")
+    row = dict(one(
+        db,
+        "SELECT name,coat,sex,neutered,care_status,temperament,cover_sighting_id FROM cats WHERE id=?",
+        cat_id,
+    ))
+    name = field(body, "name", 60, required=True) if "name" in body else row["name"]
+    coat = field(body, "coat", 80) if "coat" in body else row["coat"]
+    sex = choice_field(body, "sex", SEX_VALUES, row["sex"]) if "sex" in body else row["sex"]
+    neutered = choice_field(body, "neutered", NEUTERED_VALUES, row["neutered"]) if "neutered" in body else row["neutered"]
+    care_status = choice_field(body, "care_status", CARE_VALUES, row["care_status"]) if "care_status" in body else row["care_status"]
+    temperament = field(body, "temperament", 120) if "temperament" in body else row["temperament"]
+    cover_id = row["cover_sighting_id"]
+    if "cover_sighting_id" in body:
+        supplied_cover = body.get("cover_sighting_id")
+        if supplied_cover is None:
+            cover_id = None
+        else:
+            cover_id = integer(supplied_cover)
+            one(db, "SELECT 1 FROM sightings WHERE id=? AND cat_id=? AND status='confirmed'", cover_id, cat_id)
+    updated = {
+        "name": name,
+        "coat": coat,
+        "sex": sex,
+        "neutered": neutered,
+        "care_status": care_status,
+        "temperament": temperament,
+        "cover_sighting_id": cover_id,
+    }
+    db.execute(
+        "UPDATE cats SET name=?,coat=?,sex=?,neutered=?,care_status=?,temperament=?,cover_sighting_id=? WHERE id=?",
+        (name, coat, sex, neutered, care_status, temperament, cover_id, cat_id),
+    )
+    audit(db, actor, "profile", cat_id, row, updated, reason)
+    return {"ok": True, "cat_id": cat_id, "cover_sighting_id": cover_id}
+
+
+def merge_cats(db, actor, source_id, body):
+    target_id = integer(body.get("target_id"))
+    reason = field(body, "reason", 800, required=True)
+    if source_id == target_id:
+        raise Problem("不能将档案合并到自身。")
+    db.execute("BEGIN IMMEDIATE")
+    src = dict(one(db, "SELECT * FROM cats WHERE id=?", source_id))
+    dst = dict(one(db, "SELECT * FROM cats WHERE id=?", target_id))
+    conflict = db.execute(
+        "SELECT 1 FROM sightings a JOIN sightings b ON a.frame_id=b.frame_id "
+        "WHERE a.cat_id=? AND b.cat_id=? LIMIT 1",
+        (source_id, target_id),
+    ).fetchone()
+    if conflict:
+        raise Problem("两份档案在同一张同框照片中同时出现，请先退回其中一条同框目击再合并。", 409)
+    # Revert auto-archived sightings directly assigned to source_id so they can be re-evaluated cleanly.
+    db.execute(
+        "UPDATE sightings SET status='pending',cat_id=NULL "
+        "WHERE cat_id=? AND id IN (SELECT sighting_id FROM auto_identity)",
+        (source_id,),
+    )
+    db.execute(
+        "DELETE FROM auto_identity WHERE sighting_id NOT IN "
+        "(SELECT id FROM sightings WHERE status='confirmed')"
+    )
+    # Clear conflicting pending suggestions on frames that already reference target_id.
+    db.execute(
+        "UPDATE sightings SET suggested_cat_id=NULL WHERE suggested_cat_id=? AND frame_id IN ("
+        "SELECT frame_id FROM sightings WHERE cat_id=? OR suggested_cat_id=?)",
+        (source_id, target_id, target_id),
+    )
+    db.execute("UPDATE sightings SET suggested_cat_id=? WHERE suggested_cat_id=?", (target_id, source_id))
+    db.execute("UPDATE sightings SET cat_id=? WHERE cat_id=?", (target_id, source_id))
+
+    coat = dst["coat"] or src["coat"]
+    breed = dst["breed"] or src["breed"]
+    evidence = dst["evidence"] if dst["breed"] else src["evidence"]
+    sex = dst["sex"] if dst["sex"] != "unknown" else src["sex"]
+    neutered = dst["neutered"] if dst["neutered"] != "unknown" else src["neutered"]
+    temperament = dst["temperament"] or src["temperament"]
+    cover_id = dst["cover_sighting_id"]
+    if cover_id is None and src["cover_sighting_id"] is not None:
+        valid_cover = db.execute(
+            "SELECT 1 FROM sightings WHERE id=? AND cat_id=? AND status='confirmed'",
+            (src["cover_sighting_id"], target_id),
+        ).fetchone()
+        if valid_cover:
+            cover_id = src["cover_sighting_id"]
+    db.execute(
+        "UPDATE cats SET coat=?,breed=?,evidence=?,sex=?,neutered=?,temperament=?,cover_sighting_id=? WHERE id=?",
+        (coat, breed, evidence, sex, neutered, temperament, cover_id, target_id),
+    )
+    for alias_row in db.execute("SELECT name,submitter,status FROM aliases WHERE cat_id=?", (source_id,)).fetchall():
+        if alias_row["name"].casefold() != dst["name"].casefold():
+            db.execute(
+                "INSERT OR IGNORE INTO aliases(cat_id,name,submitter,status) VALUES(?,?,?,?)",
+                (target_id, alias_row["name"], alias_row["submitter"], alias_row["status"]),
+            )
+    if src["name"].casefold() != dst["name"].casefold():
+        db.execute(
+            "INSERT OR IGNORE INTO aliases(cat_id,name,submitter,status) VALUES(?,?,?,'approved')",
+            (target_id, src["name"], actor),
+        )
+    db.execute("DELETE FROM aliases WHERE cat_id=?", (source_id,))
+    db.execute("DELETE FROM cats WHERE id=?", (source_id,))
+    audit(db, actor, "identity", target_id, {"merged_from": src}, {"target_id": target_id}, reason)
+    return {"ok": True, "target_id": target_id}
+
+
+def known_areas(db):
+    canonical = [
+        r["name"]
+        for r in db.execute("SELECT name FROM campus_areas ORDER BY sort_order, name").fetchall()
+    ]
+    seen = {name.casefold() for name in canonical}
+    observed = db.execute("""
+        SELECT area FROM (
+            SELECT f.area, COUNT(*) AS cnt FROM frames f
+            JOIN sightings s ON s.frame_id=f.id WHERE s.status='confirmed' GROUP BY f.area
+            UNION ALL
+            SELECT area, COUNT(*) AS cnt FROM spot_checks WHERE state='done' GROUP BY area
+        ) GROUP BY area ORDER BY SUM(cnt) DESC, area
+    """).fetchall()
+    extras = []
+    for row in observed:
+        val = row["area"]
+        if val and val.casefold() not in seen:
+            seen.add(val.casefold())
+            extras.append(val)
+    return {"canonical": canonical, "areas": canonical + extras}
+
+
+def manage_areas(db, actor, body):
+    action = field(body, "action", 12, required=True)
+    name = area_field(body, "name", 60, required=True)
+    db.execute("BEGIN IMMEDIATE")
+    if action == "add":
+        db.execute("INSERT OR IGNORE INTO campus_areas(name) VALUES(?)", (name,))
+    elif action == "remove":
+        db.execute("DELETE FROM campus_areas WHERE name=?", (name,))
+    else:
+        raise Problem("无效的区域管理操作。")
+    audit(db, actor, "campus_area", 0, None, {"action": action, "name": name}, "维护校园标准区域")
+    return known_areas(db)
 
 
 def personal_album(db, uid):

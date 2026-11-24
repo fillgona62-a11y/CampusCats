@@ -2,6 +2,10 @@ param(
     [string]$Sdk = "$env:LOCALAPPDATA\Android\Sdk",
     [string]$Jdk = "$env:ProgramFiles\Android\Android Studio\jbr",
     [string]$WorkDir = "$env:TEMP\campuscats-android-build",
+    [string]$Keystore = "$env:LOCALAPPDATA\CampusCats\signing\campuscats-signing.jks",
+    [string]$StorePass = 'android',
+    [string]$KeyAlias = 'pilot',
+    [string]$KeyPass = 'android',
     [string]$OutputApk = (Join-Path $PSScriptRoot '..\..\CampusCats-android-debug.apk'),
     [string]$SchoolOrigin = ''
 )
@@ -28,7 +32,11 @@ New-Item -ItemType Directory -Force -Path $classes,$dex | Out-Null
 $jar = Join-Path $build 'app.jar'
 $unsigned = Join-Path $build 'unsigned.apk'
 $aligned = Join-Path $build 'aligned.apk'
-$key = Join-Path $WorkDir 'pilot-debug.jks'
+$key = $Keystore
+$keyDir = Split-Path -Parent $key
+if ($keyDir -and !(Test-Path -LiteralPath $keyDir)) {
+    New-Item -ItemType Directory -Force -Path $keyDir | Out-Null
+}
 $sources = @(Get-ChildItem -Path (Join-Path $PSScriptRoot 'src\campus\cats\*.java') | ForEach-Object FullName)
 $emptySources = Join-Path $build 'sourcepath'
 New-Item -ItemType Directory -Path $emptySources | Out-Null
@@ -59,8 +67,8 @@ Invoke-Checked "$bt\aapt.exe" @('package','-f','-M',"$PSScriptRoot\AndroidManife
 Invoke-Checked "$Jdk\bin\jar.exe" @('uf',$unsigned,'-C',$dex,'classes.dex')
 Invoke-Checked "$bt\zipalign.exe" @('-f','4',$unsigned,$aligned)
 if (!(Test-Path -LiteralPath $key)) {
-    Invoke-Checked "$Jdk\bin\keytool.exe" @('-genkeypair','-keystore',$key,'-storetype','JKS','-storepass','android','-keypass','android','-alias','pilot','-keyalg','RSA','-keysize','2048','-validity','3650','-dname','CN=Campus Cats Local Debug')
+    Invoke-Checked "$Jdk\bin\keytool.exe" @('-genkeypair','-keystore',$key,'-storetype','JKS','-storepass',$StorePass,'-keypass',$KeyPass,'-alias',$KeyAlias,'-keyalg','RSA','-keysize','2048','-validity','3650','-dname','CN=Campus Cats Release')
 }
-Invoke-Checked "$bt\apksigner.bat" @('sign','--v4-signing-enabled','false','--ks',$key,'--ks-key-alias','pilot','--ks-pass','pass:android','--key-pass','pass:android','--out',$OutputApk,$aligned)
+Invoke-Checked "$bt\apksigner.bat" @('sign','--v4-signing-enabled','false','--ks',$key,'--ks-key-alias',$KeyAlias,'--ks-pass',"pass:$StorePass",'--key-pass',"pass:$KeyPass",'--out',$OutputApk,$aligned)
 Invoke-Checked "$bt\apksigner.bat" @('verify','--verbose',$OutputApk)
 Write-Host (Resolve-Path -LiteralPath $OutputApk)

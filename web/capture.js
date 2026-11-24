@@ -88,7 +88,7 @@ export function capturePage(main, onSuccess, {saveLocal, draft, lookupOnly = fal
     <p id="mark-help" class="hint" aria-live="polite"></p>
     <div class="capture-stage"><div class="target-stage" id="stage" aria-describedby="mark-help"><img id="preview" alt="本次目击照片" draggable="false"><div class="mark-layer" id="marks"></div></div></div>
     <div class="advice" id="quality" role="status"></div><label class="hint" id="cloud-option" hidden><input name="cloud_photo" type="checkbox"> 允许本次查图将所选画面发送给配置的视觉模型</label><button type="button" class="btn light" id="identify">${icon('search')}照片查查 · 查重与花色识别</button>
-    <p id="lookup-status" role="status" class="hint"></p><div id="results" aria-live="polite"></div><div id="record-fields" ${lookupOnly ? 'hidden inert' : ''}><hr class="divider"><h2>保存这次目击</h2><label class="field"><span>校园区域</span><input name="area" required maxlength="60" placeholder="例如，图书馆周边"></label>
+    <p id="lookup-status" role="status" class="hint"></p><div id="results" aria-live="polite"></div><div id="record-fields" ${lookupOnly ? 'hidden inert' : ''}><hr class="divider"><h2>保存这次目击</h2><label class="field"><span>校园区域</span><input name="area" list="capture-areas" required maxlength="60" placeholder="例如，图书馆周边"><small>优先选择已有区域名称，方便归入同一地点统计。</small></label><datalist id="capture-areas"></datalist>
     <label class="field"><span>目击时间</span><input type="datetime-local" name="observed" required></label>
     <label class="field"><span>观察备注（选填）</span><textarea name="note" maxlength="800" rows="2" placeholder="例如，左前腿有一处橘色斑纹"></textarea></label><label class="hint"><input type="checkbox" name="automatic" checked> 允许自动关联已建档的猫</label><p class="hint">脸部特征充分吻合时自动记录重遇，其余目击待辨认。</p><p class="form-error" role="alert"></p><button type="submit" class="btn">${icon('book')}提交目击</button></div></form></div>`;
     const $ = selector => main.querySelector(selector), form = $('#capture-form'), stage = $('#stage'), marks = $('#marks'), video = $('#viewfinder');
@@ -218,6 +218,13 @@ export function capturePage(main, onSuccess, {saveLocal, draft, lookupOnly = fal
     api('/agent/status').then(status => {
         if (!disposed) $('#cloud-option').hidden = status.vision_mode !== 'vlm';
     }).catch(() => {});
+    if (!lookupOnly) {
+        api('/areas').then(res => {
+            if (!disposed && res?.areas?.length) {
+                $('#capture-areas').innerHTML = res.areas.map(a => `<option value="${esc(a)}"></option>`).join('');
+            }
+        }).catch(() => {});
+    }
     $('#identify').onclick = identify;
     const point = e => {
         const r = stage.getBoundingClientRect();

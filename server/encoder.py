@@ -19,7 +19,7 @@ def _sha256(path):
     return digest.hexdigest()
 
 
-VERSION = "onnx-centre224-cls-v2-" + _sha256(MODEL_PATH) if MODEL_PATH else None
+VERSION = "onnx-letterbox224-cls-v3-" + _sha256(MODEL_PATH) if MODEL_PATH else None
 _LOCK = threading.Lock()
 
 
@@ -65,14 +65,20 @@ def _engine():
 def embed(crop):
     import numpy as np
 
-    # Short side 256 -> central 224, fused so a narrow box cannot allocate
-    # an unbounded intermediate raster. Match the DINOv2 image processor.
-    side = min(crop.size) * 224 / 256
-    x, y = (crop.width - side) / 2, (crop.height - side) / 2
-    square = crop.resize((224, 224), Image.Resampling.BICUBIC, (x, y, x+side, y+side))
-    pixels = np.asarray(square, dtype=np.float32) / 255.0
-    pixels -= np.asarray([.485, .456, .406], dtype=np.float32)
-    pixels /= np.asarray([.229, .224, .225], dtype=np.float32)
+    # Aspect-preserving 224x224 letterbox padded with ImageNet mean so wide
+    # side-profile cat boxes retain head, ears, legs, and tail without memory blowup.
+    w, h = crop.size
+    scale = 224.0 / max(w, h)
+    nw = max(1, min(224, round(w * scale)))
+    nh = max(1, min(224, round(h * scale)))
+    resized = crop.resize((nw, nh), Image.Resampling.BICUBIC)
+    mean = np.asarray([.485, .456, .406], dtype=np.float32)
+    std = np.asarray([.229, .224, .225], dtype=np.float32)
+    canvas = np.broadcast_to(mean, (224, 224, 3)).copy()
+    top = (224 - nh) // 2
+    left = (224 - nw) // 2
+    canvas[top:top + nh, left:left + nw] = np.asarray(resized, dtype=np.float32) / 255.0
+    pixels = (canvas - mean) / std
     data = np.ascontiguousarray(pixels.transpose(2, 0, 1)[None])
     output = np.asarray(_engine()(data))
     if output.ndim == 3 and output.shape[0] == 1:

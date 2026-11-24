@@ -29,9 +29,29 @@ public final class MainActivity extends Activity {
     private File exportFile;
     private boolean systemCamera;
 
+    private Uri defaultOrigin() {
+        return Uri.parse(getString(getResources().getIdentifier("campus_origin", "string", getPackageName())));
+    }
+    private static Uri parseHttpsOrigin(String text) {
+        if (text == null) return null;
+        String trimmed = text.trim();
+        if (trimmed.isEmpty()) return null;
+        Uri u = Uri.parse(trimmed);
+        if (!"https".equalsIgnoreCase(u.getScheme()) || u.getHost() == null || u.getHost().isEmpty()
+            || u.getUserInfo() != null || u.getQuery() != null || u.getFragment() != null) return null;
+        String p = u.getPath();
+        if (p != null && !p.isEmpty() && !"/".equals(p)) return null;
+        return Uri.parse("https://" + u.getEncodedAuthority());
+    }
+    private Uri resolveOrigin() {
+        String custom = getSharedPreferences("campuscats", MODE_PRIVATE).getString("origin", null);
+        Uri parsed = parseHttpsOrigin(custom);
+        return parsed != null ? parsed : defaultOrigin();
+    }
+
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
-        origin = Uri.parse(getString(getResources().getIdentifier("campus_origin", "string", getPackageName())));
+        origin = resolveOrigin();
         web = new WebView(this);
         web.setBackgroundColor(Color.rgb(247,246,238));
         getWindow().setStatusBarColor(Color.rgb(247,246,238));
@@ -120,7 +140,24 @@ public final class MainActivity extends Activity {
             return true;
         }
         @Override public boolean onJsPrompt(WebView view, String url, String message, String payload, JsPromptResult result) {
-            if (!isEntry(Uri.parse(url)) || !message.startsWith("campuscats-save:")) return super.onJsPrompt(view,url,message,payload,result);
+            if (!isEntry(Uri.parse(url))) return super.onJsPrompt(view,url,message,payload,result);
+            if ("campuscats-origin:set".equals(message)) {
+                Uri next = parseHttpsOrigin(payload);
+                if (next == null) { result.cancel(); return true; }
+                getSharedPreferences("campuscats", MODE_PRIVATE).edit().putString("origin", next.toString()).apply();
+                origin = next;
+                result.confirm(origin.toString());
+                web.loadUrl(origin + ENTRY);
+                return true;
+            }
+            if ("campuscats-origin:reset".equals(message)) {
+                getSharedPreferences("campuscats", MODE_PRIVATE).edit().remove("origin").apply();
+                origin = defaultOrigin();
+                result.confirm(origin.toString());
+                web.loadUrl(origin + ENTRY);
+                return true;
+            }
+            if (!message.startsWith("campuscats-save:")) return super.onJsPrompt(view,url,message,payload,result);
             String filename = message.substring("campuscats-save:".length());
             boolean png = filename.endsWith(".png");
             if (exportFile != null || (!png && !filename.endsWith(".csv")) || payload == null || payload.length() > 12000000) {

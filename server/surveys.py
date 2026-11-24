@@ -21,6 +21,7 @@ def board(db, uid):
             SELECT area FROM spot_checks WHERE state='done'
             UNION SELECT f.area FROM frames f WHERE EXISTS
                 (SELECT 1 FROM sightings s WHERE s.frame_id=f.id AND s.status='confirmed')
+            UNION SELECT name FROM campus_areas
         ), weeks AS (
             SELECT area, COUNT(CASE WHEN started>=? THEN 1 END) AS visits,
                    COUNT(CASE WHEN started>=? AND peak>0 THEN 1 END) AS seen,
@@ -45,7 +46,7 @@ def board(db, uid):
 
 
 def start(db, uid, body):
-    area = field(body, "area", 60, required=True)
+    area = " ".join(field(body, "area", 60, required=True).split())
     key = field(body, "request_id", 80, required=True)
     if not re.fullmatch(r"[A-Za-z0-9_-]+", key) or any(ord(c)<32 for c in area):
         raise Problem("请检查区域和提交编号。")

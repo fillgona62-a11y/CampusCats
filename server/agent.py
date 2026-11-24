@@ -8,6 +8,7 @@ Works in two modes:
 
 import json
 import os
+import threading
 import urllib.error
 import urllib.request
 from collections import Counter
@@ -20,6 +21,8 @@ from catalog import SIGHTING_QUERY, catalog, identify, iso, serialize, stats
 from media import Problem
 
 DEFAULT_CHAT_MODEL = "gpt-4o-mini"
+_MAX_LLM_CONCURRENCY = max(1, min(int(os.getenv("CAMPUSCATS_LLM_CONCURRENCY", "3")), 32))
+_LLM_SLOTS = threading.BoundedSemaphore(_MAX_LLM_CONCURRENCY)
 
 SYSTEM_PROMPT = (
     "你是「猫迹 · 校园猫图鉴」的智能校园猫管家。你可以调用工具查询数据库中的校园猫档案、"
@@ -121,6 +124,10 @@ def _compact_card(cat):
         "coat": cat.get("coat", ""),
         "breed": cat.get("breed", ""),
         "breed_status": cat.get("breed_status", "unknown"),
+        "sex": cat.get("sex", "unknown"),
+        "neutered": cat.get("neutered", "unknown"),
+        "care_status": cat.get("care_status", "school"),
+        "temperament": cat.get("temperament", ""),
         "area": cat.get("area", ""),
         "last_seen": cat.get("last_seen", ""),
         "sightings": cat.get("sightings", 0),
@@ -128,6 +135,17 @@ def _compact_card(cat):
         "photo_url": cat.get("photo_url", ""),
         "thumbnail_url": cat.get("thumbnail_url", ""),
     }
+
+
+_META_KEYWORDS = {
+    "female": "母 母猫 妹妹 小母猫",
+    "male": "公 公猫 弟弟 小公猫",
+    "neutered": "已绝育 绝育 剪耳",
+    "intact": "未绝育 没绝育",
+    "attention": "需关注 生病 住院 受伤",
+    "adopted": "已领养 领养 毕业",
+    "memorial": "喵星 纪念 去世",
+}
 
 
 def _execute_tool(db, name, args, context):
@@ -146,7 +164,17 @@ def _execute_tool(db, name, args, context):
             if area and area not in str(cat.get("area", "")).lower():
                 continue
             haystack = " ".join(
-                [cat.get("name", ""), cat.get("coat", ""), cat.get("breed", ""), cat.get("area", ""), *cat.get("aliases", [])]
+                [
+                    cat.get("name", ""),
+                    cat.get("coat", ""),
+                    cat.get("breed", ""),
+                    cat.get("area", ""),
+                    cat.get("temperament", ""),
+                    _META_KEYWORDS.get(cat.get("sex", ""), ""),
+                    _META_KEYWORDS.get(cat.get("neutered", ""), ""),
+                    _META_KEYWORDS.get(cat.get("care_status", ""), ""),
+                    *cat.get("aliases", []),
+                ]
             ).lower()
             if q and q not in haystack:
                 continue
@@ -364,10 +392,16 @@ def chat(db, body):
         user_text += f"\n（系统提示：用户本轮附带了一张照片，区域提示：{area or '未填'}，请调用 identify_uploaded_photo 工具分析。）"
     messages.append({"role": "user", "content": user_text})
 
+    if not _LLM_SLOTS.acquire(blocking=False):
+        busy_fallback = _local_fallback(db, message, context)
+        busy_fallback["reply"] += "\n（当前智能对话请求较多，已自动切换为快速本地查库模式。）"
+        return busy_fallback
+
     used_tools = []
     try:
         if cfg.get("protocol") == "chat":
             local = _local_fallback(db, message, context)
+            db.commit()
             messages.insert(1, {"role":"system", "content":"本轮校园图鉴的查询结果供参考：" + local["reply"]})
             response = _call_chat_llm(messages, cfg)
             reply = response["choices"][0]["message"]["content"]
@@ -375,6 +409,7 @@ def chat(db, body):
                 raise ValueError("Agent 未返回文本。")
             return dict(local, mode="llm", reply=reply)
         for _ in range(4):
+            db.commit()
             resp = _call_chat_llm(messages, cfg, require_photo=bool(photo and not context["identification"]))
             choice = resp["choices"][0]["message"]
             tool_calls = choice.get("tool_calls") or []
@@ -411,3 +446,5 @@ def chat(db, body):
         fallback = _local_fallback(db, message, context)
         fallback["reply"] += "\n（当前大模型接口暂时不可用，已自动切换为本地查库模式。）"
         return fallback
+    finally:
+        _LLM_SLOTS.release()

@@ -1627,3 +1627,18 @@ html.chat-open { overflow:hidden; }
   #mobile a[aria-current=page] .icon { background:#e1ecd9; border-radius:10px; box-sizing:content-box; padding:2px 9px; }
   #mobile a .icon { padding:2px 9px; box-sizing:content-box; }
 }
+.cat-tags { display:flex; flex-wrap:wrap; gap:6px; margin:6px 0; }
+.cat-tag { display:inline-block; font-size:12px; line-height:1.4; padding:2px 8px; border-radius:10px; background:#e7eee0; color:var(--deep); font-weight:600; }
+.cat-tag.neuter-intact { background:#f5ebd6; color:#6d4c1d; }
+.cat-tag.care-attention { background:#fbe4df; color:#842d1d; }
+.cat-tag.care-adopted { background:#dfeef6; color:#1c4d66; }
+.cat-tag.care-memorial { background:#e9e8ec; color:#4b4954; }
+.form-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:0 12px; }
+.area-chips { display:flex; flex-wrap:wrap; gap:8px; margin:10px 0; }
+.area-chip { display:inline-flex; align-items:center; gap:4px; padding:4px 10px; border-radius:16px; background:var(--accent); border:1px solid var(--line); font-size:13px; }
+.area-chip .btn.ghost { min-height:24px; padding:0 4px; font-size:15px; line-height:1; }
+@media(max-width:620px) {
+  .gallery-controls { flex-wrap:wrap; }
+  .gallery-controls .search-box { flex-basis:100%; }
+  .gallery-controls select { flex:1; }
+}

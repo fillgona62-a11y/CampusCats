@@ -1,4 +1,9 @@
 # Install inside nginx's http context. Replace the domain, certificate paths and private IP.
+map $upstream_http_cache_control $campus_media_cache {
+    default $upstream_http_cache_control;
+    ""      "private, no-store";
+}
+
 upstream campus_api {
     server 10.20.0.4:8765;
     keepalive 16;
@@ -41,7 +46,7 @@ server {
         internal;
         alias /srv/campuscats-media/;
         types { image/jpeg jpg; }
-        add_header Cache-Control "private, no-store" always;
+        add_header Cache-Control $campus_media_cache always;
         add_header X-Content-Type-Options nosniff always;
     }
 }

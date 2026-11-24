@@ -12,6 +12,11 @@ from collections import Counter
 from PIL import Image, ImageFilter, ImageStat
 import encoder
 
+try:
+    import numpy as np
+except ImportError:
+    np = None
+
 MODEL_VERSION = encoder.VERSION or "coat-texture-1"
 # Provisional distance for showing suggestions. Validate on local photographs.
 DEFAULT_MAX_DISTANCE = float(os.getenv("CAMPUSCATS_DISTANCE", "0.22" if encoder.VERSION else "0.31"))
@@ -19,6 +24,18 @@ if not math.isfinite(DEFAULT_MAX_DISTANCE) or not 0 <= DEFAULT_MAX_DISTANCE <= 1
     raise ValueError("CAMPUSCATS_DISTANCE 取值范围为 0 至 1。")
 HIST_SIZE = 42
 FEATURE_SIZE = HIST_SIZE * 3 + 10
+_HIST_GROUPS = (
+    (0, HIST_SIZE, .52),
+    (HIST_SIZE, 2 * HIST_SIZE, .13),
+    (2 * HIST_SIZE, 3 * HIST_SIZE, .13),
+    (3 * HIST_SIZE, FEATURE_SIZE, .22),
+)
+if np is not None:
+    _L1_WEIGHTS = np.empty(FEATURE_SIZE, dtype=np.float64)
+    for _start, _end, _weight in _HIST_GROUPS:
+        _L1_WEIGHTS[_start:_end] = 0.5 * _weight
+else:
+    _L1_WEIGHTS = None
 
 
 def pixel_box(image, box):
@@ -128,22 +145,41 @@ def rank_candidates(query, references, limit=3, max_distance=DEFAULT_MAX_DISTANC
         return []
     best = {}
     reference_ids = {}
+    valid_meta = []
+    valid_vecs = []
     for cat_id, reference in references:
         if not reference.get("usable") or reference.get("version") != MODEL_VERSION:
             continue
         b = reference.get("features", [])
         if len(b) != len(a):
             continue
+        valid_meta.append((cat_id, reference.get("_reference_id")))
+        valid_vecs.append(b)
+    if not valid_vecs:
+        return []
+    if np is not None and len(valid_vecs) >= 4:
+        mat = np.asarray(valid_vecs, dtype=np.float64)
+        q = np.asarray(a, dtype=np.float64)
         if encoder.VERSION:
-            distance = max(0.0, 1 - sum(p*q for p, q in zip(a, b)))
+            distances = np.maximum(0.0, 1.0 - mat @ q).tolist()
         else:
-            groups = ((0, HIST_SIZE, .52), (HIST_SIZE, 2*HIST_SIZE, .13),
-                      (2*HIST_SIZE, 3*HIST_SIZE, .13), (3*HIST_SIZE, FEATURE_SIZE, .22))
-            distance = sum(weight * .5 * sum(abs(a[i] - b[i]) for i in range(start, end))
-                           for start, end, weight in groups)
+            distances = (np.abs(mat - q) @ _L1_WEIGHTS).tolist()
+    else:
+        distances = []
+        for b in valid_vecs:
+            if encoder.VERSION:
+                distances.append(max(0.0, 1 - sum(p * q for p, q in zip(a, b))))
+            else:
+                distances.append(
+                    sum(
+                        weight * .5 * sum(abs(a[i] - b[i]) for i in range(start, end))
+                        for start, end, weight in _HIST_GROUPS
+                    )
+                )
+    for (cat_id, ref_id), distance in zip(valid_meta, distances):
         if distance <= max_distance and distance < best.get(cat_id, math.inf):
             best[cat_id] = distance
-            reference_ids[cat_id] = reference.get("_reference_id")
+            reference_ids[cat_id] = ref_id
     ordered = sorted(best, key=lambda identity: (best[identity], str(identity)))
     result = []
     for cat_id in ordered[:limit]:

@@ -25,7 +25,16 @@ CREATE TABLE IF NOT EXISTS cats (
     name TEXT NOT NULL,
     coat TEXT NOT NULL DEFAULT '',
     breed TEXT NOT NULL DEFAULT '',
-    evidence TEXT NOT NULL DEFAULT ''
+    evidence TEXT NOT NULL DEFAULT '',
+    sex TEXT NOT NULL DEFAULT 'unknown' CHECK(sex IN ('unknown','female','male')),
+    neutered TEXT NOT NULL DEFAULT 'unknown' CHECK(neutered IN ('unknown','neutered','intact')),
+    care_status TEXT NOT NULL DEFAULT 'school' CHECK(care_status IN ('school','attention','adopted','memorial')),
+    temperament TEXT NOT NULL DEFAULT '',
+    cover_sighting_id INTEGER DEFAULT NULL
+);
+CREATE TABLE IF NOT EXISTS campus_areas (
+    name TEXT PRIMARY KEY COLLATE NOCASE,
+    sort_order INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS frames (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -91,6 +100,17 @@ WHEN OLD.status='confirmed'
 BEGIN
     UPDATE sightings SET status='pending', cat_id=NULL
     WHERE id IN (SELECT sighting_id FROM auto_identity WHERE first_reference=OLD.id OR second_reference=OLD.id);
+END;
+CREATE TRIGGER IF NOT EXISTS clear_cover_on_sighting_change
+BEFORE UPDATE OF status, cat_id ON sightings
+WHEN OLD.status='confirmed' AND (NEW.status!='confirmed' OR NEW.cat_id IS NOT OLD.cat_id)
+BEGIN
+    UPDATE cats SET cover_sighting_id=NULL WHERE id=OLD.cat_id AND cover_sighting_id=OLD.id;
+END;
+CREATE TRIGGER IF NOT EXISTS clear_cover_on_sighting_delete
+BEFORE DELETE ON sightings
+BEGIN
+    UPDATE cats SET cover_sighting_id=NULL WHERE cover_sighting_id=OLD.id;
 END;
 CREATE TABLE IF NOT EXISTS aliases (
     id INTEGER PRIMARY KEY,

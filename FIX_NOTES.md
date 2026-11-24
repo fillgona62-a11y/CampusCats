@@ -1,14 +1,31 @@
-# CampusCats v0.3.1 修复与优化说明
+# CampusCats v0.4.0 优化与升级说明
 
-基于仓库提交 `9107d3ce`（安卓 0.3.0）完成以下修复与体验优化，全部 14 项单元测试已通过：
+## v0.4.0 全方位架构、安全与校园运营升级
+
+1. **反向代理真实 IP 识别与注册/登录双维限流**（`server/accounts.py`、`server/app.py`、`deploy/env.example`）
+   - 新增 `CAMPUS_TRUSTED_PROXIES` 可信代理网段支持（兼容 `CAMPUS_TRUST_LOCAL_PROXY=1`），在单机与双机 Nginx 反代下准确提取客户端真实 IP，消除全校游客共用同一限流桶导致的误伤 `429`。
+   - 为注册、登录和找回密码接口补齐来源 IP 维度限流，防范批量刷号与密码喷洒。
+2. **并发隔离、无锁媒体落盘与分级 HTTP 图像缓存**（`server/agent.py`、`server/catalog.py`、`server/media.py`、`server/app.py`、`deploy/nginx.conf.example`）
+   - 为外部大模型调用增加并发信号量隔离并在等待网络前提交/释放 SQLite 读事务，防止慢速 LLM 请求占满全部工作线程拖垮主站。
+   - 将内容寻址的媒体文件落盘（`save_media` + `fsync`）移出 SQLite `BEGIN IMMEDIATE` 写锁并在异常回滚时安全清理未引用文件，显著缩短写锁持有时间。
+   - 对已审核公开缩略图与裁剪图启用 `Cache-Control: public, max-age=3600` 与 `ETag` / `304 Not Modified` 校验，待审核与原图保持 `private, no-store`，大幅节省校园出口带宽。
+3. **校园猫核心档案字段、精选封面、重复档案合并与标准区域字典**（`server/schema.sql`、`server/catalog.py`、`web/app.js`、`web/review.js`、`web/capture.js`）
+   - 支持老库在线平滑迁移，新增性别、绝育状态、在校状态与性格相处提示字段，图鉴与猫猫助手同步支持检索与状态筛选。
+   - 支持维护者指定精选封面照（照片重审退回或删除时由触发器自动回退），支持重复档案原子合并（自动迁移目击与别名、拦截同框冲突）。
+   - 支持维护校园标准区域字典，并在记录目击页提供区域自动补全与空白符规范化。
+4. **视觉编码长宽比保留、NumPy 向量化检索与离线复测对齐**（`server/encoder.py`、`server/vision.py`、`evaluate/run.py`）
+   - ONNX 编码器改为 224×224 长宽比保留 Letterbox 缩放（ImageNet 均值填充），避免横向侧身猫被裁掉头尾辨识特征。
+   - 利用 NumPy 矩阵运算加速候选距离排序，并增加进程内版本化参考向量缓存。
+   - 离线复测工具默认对齐线上 2048px JPEG 重编码管线，并新增自动归档准确率/误判率统计指标。
+5. **高清带二维码分享卡、Android 站点切换与工程化自动化**（`web/qrcode.js`、`web/album.js`、`web/app.js`、`mobile/android/`、`.github/workflows/ci.yml`）
+   - 内置零依赖 ISO 标准二维码生成模块，重遇卡与相遇卡升级为 2x 高清渲染、长文本自适应截断并附带扫码直达档案二维码。
+   - Android 客户端升级至 0.4.0，支持在应用内动态切换校园 HTTPS 站点地址，打包脚本默认使用本地持久化签名证书以保障覆盖升级不丢失本机草稿；新增 GitHub Actions 双环境自动化单测流水线。
+
+---
+
+## v0.3.1 修复与优化说明
 
 1. **修复备份恢复与密钥损坏导致 503 的隐患**（`server/backup.py`、`server/providers.py`）
-   - `backup.py` 生成快照时同步清理 `agent_providers` 表（与 `sessions` 一致），避免恢复到新环境缺少 `agent-key.fernet` 时解密报错。
-   - `providers.effective()` 捕获密钥缺失或损坏异常，自动降级为本地模式，不再阻断 `/api/identify` 和 `/api/agent/status`。
 2. **「照片查查」直连 `/api/identify`，消除多余 LLM 开销**（`server/app.py`、`web/capture.js`）
-   - 开放 `/api/identify` 支持未登录请求（沿用按用户/IP 限流），游客与本机草稿模式查图不再绕道 `/api/agent/chat`。
 3. **补齐视觉模型连通测试与推理模型兼容**（`server/providers.py`、`server/ai_vision.py`、`web/agent-settings.js`）
-   - 在设置页点击「测试连接」时，若填写了 `vision_model`，会顺带发送极小测试图校验视觉模型是否支持图片输入。
-   - 自配服务商调用视觉模型时与对话模型一致省略 `temperature` 参数，兼容 o1/o3 等推理模型。
 4. **识图结果一键联动「猫猫助手」**（`web/capture.js`、`web/agent.js`）
-   - 每张查图结果卡新增「问问猫猫助手」按钮，点击自动打开助手并带入本次查重与花色/品种结论。

@@ -1,4 +1,5 @@
 import { back, btn, busy, date, empty, esc, head, icon, img, status } from './ui.js';
+import { drawQr, fitText } from './qrcode.js';
 
 function albumCats(visits, area) {
     const cats = new Map();
@@ -54,26 +55,36 @@ async function renderSouvenir(sighting, frame, element) {
     photo.src = '/media/crop/' + Number(sighting.id) + '.jpg';
     await photo.decode();
     const canvas = document.createElement('canvas');
-    canvas.width = 800;
-    canvas.height = 910;
+    const dpr = 2;
+    canvas.width = 800 * dpr;
+    canvas.height = 930 * dpr;
     const ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
     ctx.fillStyle = '#fffdf3';
-    ctx.fillRect(0, 0, 800, 910);
+    ctx.fillRect(0, 0, 800, 930);
     ctx.fillStyle = '#e5e6d9';
     ctx.fillRect(28, 28, 744, 585);
     const scale = Math.min(744 / photo.naturalWidth, 585 / photo.naturalHeight);
     const w = photo.naturalWidth * scale, h = photo.naturalHeight * scale;
     ctx.drawImage(photo, 28 + (744 - w) / 2, 28 + (585 - h) / 2, w, h);
     ctx.fillStyle = '#183b34';
-    ctx.font = 'bold 47px "Songti SC","SimSun",serif';
-    ctx.fillText(sighting.cat_name, 36, 680, 728);
-    ctx.font = '26px "PingFang SC","Microsoft YaHei",sans-serif';
-    ctx.fillText(frame.area + ' · ' + date(frame.observed_at), 36, 740, 728);
-    ctx.fillText(sighting.encounter_number === 1 ? '初次相遇' : '第 ' + sighting.encounter_number + ' 次相遇', 36, 786, 728);
+    ctx.font = 'bold 46px "Songti SC","SimSun",serif';
+    ctx.fillText(fitText(ctx, sighting.cat_name, 560), 36, 680);
+    ctx.font = '25px "PingFang SC","Microsoft YaHei",sans-serif';
+    ctx.fillStyle = '#38554b';
+    ctx.fillText(fitText(ctx, frame.area + ' · ' + date(frame.observed_at), 560), 36, 738);
+    ctx.fillText(sighting.encounter_number === 1 ? '初次相遇' : '第 ' + sighting.encounter_number + ' 次相遇', 36, 784);
+    const catUrl = `${location.origin}/#cat/${Number(sighting.cat_id)}`;
+    if (drawQr(ctx, catUrl, 628, 636, 140, '#163f37', '#ffffff')) {
+        ctx.font = '16px "PingFang SC","Microsoft YaHei",sans-serif';
+        ctx.fillStyle = '#526a60';
+        ctx.fillText('扫码查看档案', 650, 796);
+    }
     ctx.fillStyle = '#163f37';
-    ctx.fillRect(0, 831, 800, 79);
+    ctx.fillRect(0, 845, 800, 85);
     ctx.fillStyle = '#fffdf3';
-    ctx.fillText('猫迹 · 校园猫图鉴', 36, 882);
+    ctx.font = '25px "PingFang SC","Microsoft YaHei",sans-serif';
+    ctx.fillText('猫迹 · 校园猫图鉴', 36, 897);
     const url = canvas.toDataURL('image/png');
     element.innerHTML = img(url, '可长按保存的相遇卡', 'class="souvenir-image"') +
         `<a class="link" href="${url}" download="猫迹-相遇卡-${Number(sighting.id)}.png">下载相遇卡</a><span class="hint">也可长按图片保存</span>`;

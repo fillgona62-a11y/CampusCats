@@ -89,8 +89,36 @@ export async function busy(control, operation, form = control.closest('form')) {
         control.disabled = false;
     }
 }
+export const SEX_LABELS = { unknown: '性别待确认', female: '母猫', male: '公猫' };
+export const NEUTERED_LABELS = { unknown: '绝育待确认', neutered: '已绝育', intact: '未绝育' };
+export const CARE_LABELS = { school: '在校活跃', attention: '需关注健康', adopted: '已领养毕业', memorial: '喵星纪念' };
+
+export function catTags(cat) {
+    const tags = [];
+    if (cat.care_status && cat.care_status !== 'school' && CARE_LABELS[cat.care_status])
+        tags.push(['care-' + cat.care_status, CARE_LABELS[cat.care_status]]);
+    if (cat.neutered && cat.neutered !== 'unknown' && NEUTERED_LABELS[cat.neutered])
+        tags.push(['neuter-' + cat.neutered, NEUTERED_LABELS[cat.neutered]]);
+    if (cat.sex && cat.sex !== 'unknown' && SEX_LABELS[cat.sex])
+        tags.push(['sex', SEX_LABELS[cat.sex]]);
+    return tags.length ? `<div class="cat-tags">${tags.map(([cls, label]) => `<span class="cat-tag ${esc(cls)}">${esc(label)}</span>`).join('')}</div>` : '';
+}
+
+export function catSearchText(cat) {
+    return [
+        cat.name,
+        ...(cat.aliases || []),
+        cat.coat,
+        cat.breed,
+        cat.temperament,
+        cat.sex !== 'unknown' ? SEX_LABELS[cat.sex] : '',
+        cat.neutered !== 'unknown' ? NEUTERED_LABELS[cat.neutered] : '',
+        CARE_LABELS[cat.care_status] || '',
+    ].filter(Boolean).join(' ').toLowerCase();
+}
+
 export function card(cat) {
-    return `<a class="cat-card" href="#cat/${Number(cat.id)}">${img(cat.thumbnail_url || cat.photo_url, cat.name, 'loading="lazy"')}<div class="card-body"><h3>${esc(cat.name)}</h3><p>${esc(cat.coat || '花色待补')} · ${Number(cat.sightings)} 次目击</p><p class="meta">${icon('pin')}${esc(cat.area || '区域待补')}</p></div></a>`;
+    return `<a class="cat-card" href="#cat/${Number(cat.id)}">${img(cat.thumbnail_url || cat.photo_url, cat.name, 'loading="lazy"')}<div class="card-body"><h3>${esc(cat.name)}</h3><p>${esc(cat.coat || '花色待补')} · ${Number(cat.sightings)} 次目击</p>${catTags(cat)}<p class="meta">${icon('pin')}${esc(cat.area || '区域待补')}</p></div></a>`;
 }
 export function candidates(s) {
     return (s.candidates || []).length ? `<p class="hint">按框内花色、明暗和纹理列出相似档案，仍需核对脸部和四肢的花纹。</p><div class="gallery">${s.candidates.map(card).join('')}</div>` : `<p class="hint">暂无可比对的候选。可以保留待辨认，等有清晰照片再核对。</p>`;

@@ -1,10 +1,13 @@
 """Password accounts and expiring, same-origin cookie sessions."""
 import hashlib
 import hmac
+import ipaddress
+import os
 import re
 import secrets
 import sqlite3
 import time
+from functools import lru_cache
 from http.cookies import CookieError, SimpleCookie
 
 from catalog import field
@@ -13,6 +16,56 @@ from media import Problem
 
 def digest(value):
     return hashlib.sha256(value.encode()).hexdigest()
+
+
+@lru_cache(maxsize=8)
+def _trusted_networks(raw, trust_local):
+    items = [part.strip() for part in raw.split(",") if part.strip()]
+    if trust_local == "1":
+        items.extend(("127.0.0.1/32", "::1/128"))
+    nets = []
+    for item in items:
+        try:
+            nets.append(ipaddress.ip_network(item, strict=False))
+        except ValueError:
+            continue
+    return tuple(nets)
+
+
+def _valid_ip(value):
+    text = (value or "").strip()
+    if not text:
+        return None
+    try:
+        return ipaddress.ip_address(text)
+    except ValueError:
+        return None
+
+
+def client_ip(env):
+    """Return validated client IP, honoring X-Real-IP / X-Forwarded-For only from trusted proxies."""
+    remote_raw = (env.get("REMOTE_ADDR") or "").strip()
+    remote = _valid_ip(remote_raw)
+    if remote is None:
+        return remote_raw or "unknown"
+    nets = _trusted_networks(
+        os.getenv("CAMPUS_TRUSTED_PROXIES", ""),
+        os.getenv("CAMPUS_TRUST_LOCAL_PROXY", ""),
+    )
+    if nets and any(remote in net for net in nets):
+        real = _valid_ip(env.get("HTTP_X_REAL_IP"))
+        if real is not None:
+            return str(real)
+        xff = env.get("HTTP_X_FORWARDED_FOR") or ""
+        if xff:
+            parts = [_valid_ip(p) for p in xff.split(",")]
+            valid = [ip for ip in parts if ip is not None]
+            for candidate in reversed(valid):
+                if not any(candidate in net for net in nets):
+                    return str(candidate)
+            if valid:
+                return str(valid[0])
+    return str(remote)
 
 
 def password_hash(password, salt):
@@ -73,6 +126,8 @@ def auth(db, path, body, env, secure, headers):
     if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
         raise Problem("请输入有效的邮箱地址。")
     password = password_field(body, new=path != "login")
+    peer = client_ip(env)
+    throttle(db, f"auth-ip:{path}:{peer}", 60 if path == "login" else 30, 900)
     throttle(db, f"auth:{path}:{email}", 16, 900)
     if path == "register":
         nickname = field(body, "nickname", 40, required=True)

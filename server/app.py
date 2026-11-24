@@ -19,8 +19,10 @@ import accounts
 import providers
 import surveys
 import agent
-from catalog import (SIGHTING_QUERY, audit, catalog, connect, encounter_receipt, field, identify, integer, one, personal_album,
-                     reunions, review_breed, review_identity, revision, serialize, similar_pending, stats, upload)
+from catalog import (SIGHTING_QUERY, audit, catalog, connect, encounter_receipt, field, identify, integer,
+                     known_areas, manage_areas, merge_cats, migrate, one, personal_album, reunions,
+                     review_breed, review_identity, revision, serialize, similar_pending, stats,
+                     update_cat_profile, upload)
 from media import Problem
 
 HERE = Path(__file__).resolve().parent
@@ -107,14 +109,16 @@ class App:
         self.secure = secure_cookie
         self.data.mkdir(parents=True,exist_ok=True)
         self.media.mkdir(parents=True,exist_ok=True)
-        with closing(connect(self.db_path)) as db:
+        with closing(connect(self.db_path)) as db, db:
             db.executescript((HERE/"schema.sql").read_text(encoding="utf-8"))
+            migrate(db)
 
     def __call__(self, env, start_response):
         method, path = env["REQUEST_METHOD"], env["PATH_INFO"]
         headers = [("Cache-Control","no-store"),("X-Content-Type-Options","nosniff"),
                    ("Referrer-Policy","same-origin")]
         provider_token = None
+        status = 200
         try:
             if path.startswith(("/api/","/media/")):
                 with closing(connect(self.db_path)) as db, db:
@@ -130,7 +134,7 @@ class App:
                         db.execute("BEGIN")
                         data = self.get(db,path,user)
                     elif method in {"HEAD","GET"} and path.startswith("/media/"):
-                        body, mime = self.media_response(db,path,user,headers)
+                        status, body, mime = self.media_response(db,path,user,env,headers)
                         data = None
                     else:
                         raise Problem("不支持该请求方式。",405)
@@ -141,7 +145,6 @@ class App:
                 raise Problem("不支持该请求方式。",405)
             if data is not None:
                 body,mime = json.dumps(data,ensure_ascii=False).encode(), "application/json; charset=utf-8"
-            status = 200
         except (Problem, OverflowError) as error:
             status = error.status if isinstance(error, Problem) else 400
             body,mime = json.dumps({"error":str(error) if isinstance(error,Problem) else "数字过大。"},
@@ -155,6 +158,10 @@ class App:
         finally:
             if provider_token is not None:
                 providers.active.reset(provider_token)
+        if status == 304:
+            headers += [("Content-Length", "0")]
+            start_response(f"304 {HTTPStatus(304).phrase}", headers)
+            return [b""]
         headers += [("Content-Type",mime),("Content-Length",str(len(body)))]
         start_response(f"{status} {HTTPStatus(status).phrase}", headers)
         return [b"" if method == "HEAD" else body]
@@ -168,7 +175,7 @@ class App:
         mime = {".webmanifest":"application/manifest+json",".js":"text/javascript"}.get(name.suffix)
         return name.read_bytes(), mime or mimetypes.guess_type(name.name)[0] or "application/octet-stream"
 
-    def media_response(self, db, path, user, headers):
+    def media_response(self, db, path, user, env, headers):
         match = re.fullmatch(r"/media/(crop|thumb|frame)/(\d{1,18})\.jpg",path)
         if not match:
             raise Problem("照片不存在。",404)
@@ -184,11 +191,21 @@ class App:
             public = False
         if not public and (not user or (user["id"] != row["user_id"] and user["role"]!="reviewer")):
             raise Problem("照片不存在。",404)
+        headers[:] = [h for h in headers if h[0] != "Cache-Control"]
+        if public:
+            etag = f'"{row["file"]}"'
+            headers.append(("Cache-Control", "public, max-age=3600, stale-while-revalidate=86400"))
+            headers.append(("ETag", etag))
+            inm = env.get("HTTP_IF_NONE_MATCH", "")
+            if inm and etag in [part.strip() for part in inm.split(",")]:
+                return 304, b"", "image/jpeg"
+        else:
+            headers.append(("Cache-Control", "private, no-store"))
         if self.accel:
             headers.append(("X-Accel-Redirect","/_campus_media/"+row["file"]))
-            return b"","image/jpeg"
+            return 200, b"", "image/jpeg"
         try:
-            return (self.media / row["file"]).read_bytes(),"image/jpeg"
+            return 200, (self.media / row["file"]).read_bytes(), "image/jpeg"
         except FileNotFoundError:
             raise Problem("照片已撤回或暂不可用。",404) from None
 
@@ -205,6 +222,8 @@ class App:
             return agent.status_info()
         if path == "/api/surveys":
             return surveys.board(db, user["id"] if user else None)
+        if path == "/api/areas":
+            return known_areas(db)
         if path == "/api/home":
             cats = catalog(db)
             return {"stats":stats(db,cats),"cats":list(cats.values())}
@@ -225,7 +244,7 @@ class App:
             aliases_to_review = db.execute("SELECT a.id,a.name,c.name AS cat_name FROM aliases a JOIN cats c "
                                            "ON c.id=a.cat_id WHERE a.status='pending' ORDER BY a.id")
             return {"sightings":serialize(db,rows,private=True),"aliases":[dict(r) for r in aliases_to_review],
-                    "catalog_revision":revision(db)}
+                    "catalog_revision":revision(db),"areas":known_areas(db)}
         match = re.fullmatch(r"/api/review/(\d{1,18})/similar",path)
         if match:
             require(user,reviewer=True)
@@ -259,9 +278,7 @@ class App:
             body = read_json(env,8192)
             return accounts.auth(db,auth_route[1],body,env,self.secure,headers)
         if path in ("/api/agent/chat", "/api/identify"):
-            peer = env.get("REMOTE_ADDR", "")
-            if os.getenv("CAMPUS_TRUST_LOCAL_PROXY") == "1" and peer in ("127.0.0.1","::1"):
-                peer = env.get("HTTP_X_REAL_IP") or peer
+            peer = accounts.client_ip(env)
             actor = f"user:{user['id']}" if user else f"guest:{peer}"
             if path == "/api/agent/chat":
                 accounts.throttle(db, f"agent:{actor}", 60, 3600)
@@ -308,12 +325,20 @@ class App:
             db.execute("UPDATE sightings SET suggested_cat_id=? WHERE id=?",(cid,int(match[1])))
             return {"ok":True}
         require(user,reviewer=True)
+        if path == "/api/areas":
+            return manage_areas(db, uid, body)
         match = re.fullmatch(r"/api/review/(\d{1,18})",path)
         if match:
             return review_identity(db,uid,int(match[1]),body)
         match = re.fullmatch(r"/api/cats/(\d{1,18})/breed",path)
         if match:
             return review_breed(db,uid,int(match[1]),body)
+        match = re.fullmatch(r"/api/cats/(\d{1,18})/profile",path)
+        if match:
+            return update_cat_profile(db,uid,int(match[1]),body)
+        match = re.fullmatch(r"/api/cats/(\d{1,18})/merge",path)
+        if match:
+            return merge_cats(db,uid,int(match[1]),body)
         match = re.fullmatch(r"/api/aliases/(\d{1,18})/review",path)
         if match:
             approve = body.get("approve")

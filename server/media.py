@@ -106,6 +106,7 @@ def prepare(photo, boxes, *, verify=False):
 
 def save_media(folder, media):
     # Publish complete immutable files before committing rows which point to them.
+    created = []
     for filename, content in media.items():
         destination = folder / filename
         if destination.is_file():
@@ -125,5 +126,7 @@ def save_media(folder, media):
             if os.name == "posix":
                 temporary.chmod(0o640)
             os.replace(temporary, destination)
+            created.append(filename)
         finally:
             temporary.unlink(missing_ok=True)
+    return created
