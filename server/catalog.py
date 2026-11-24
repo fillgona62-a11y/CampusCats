@@ -13,6 +13,18 @@ from face_match import automatic_match
 from media import Problem, canonical_photo, prepare, save_media, validate_boxes
 from vision import MODEL_VERSION, analyze_crop, assess_db_match, pixel_box, rank_candidates
 
+SYLU_PRESET_AREAS = (
+    "图书馆（琴园环路）",
+    "兵器博物馆 / 兵器广场",
+    "志学堂",
+    "教学楼区",
+    "餐饮服务中心（食堂）",
+    "学生生活区（宿舍）",
+    "体育场 / 操场",
+    "琴园绿地",
+    "北门（汇泉东路）",
+    "南门（南屏中路）",
+)
 SEX_VALUES = ("unknown", "female", "male")
 NEUTERED_VALUES = ("unknown", "neutered", "intact")
 CARE_VALUES = ("school", "attention", "adopted", "memorial")
@@ -566,7 +578,12 @@ def known_areas(db):
         if val and val.casefold() not in seen:
             seen.add(val.casefold())
             extras.append(val)
-    return {"canonical": canonical, "areas": canonical + extras}
+    presets = []
+    for preset in SYLU_PRESET_AREAS:
+        if preset.casefold() not in seen:
+            seen.add(preset.casefold())
+            presets.append(preset)
+    return {"canonical": canonical, "preset": list(SYLU_PRESET_AREAS), "areas": canonical + extras + presets}
 
 
 def manage_areas(db, actor, body):

@@ -4,7 +4,7 @@ function checkForm(data, user) {
     if (!user) return `<section class="surface"><h2>参加十分钟观察</h2><p>在一个固定位置安静观察。同行时，由一人记录这十分钟内同时看见的最多只数。</p>${btn('#login/surveys','登录后参加','time')}</section>`;
     if (!data.active) return `<form class="surface" id="survey-start"><h2>开始十分钟观察</h2>
         <p>到达观察点再开始计时。留在原处，记下同时看见的最多只数。多人同行时由一人提交。</p>
-        <label class="field"><span>校园区域</span><input required name="area" maxlength="60" list="known-areas" placeholder="例如，图书馆周边"><small>同一地点沿用已有名称，只填写大致区域。</small></label>
+        <label class="field"><span>校园区域</span><input required name="area" maxlength="60" list="known-areas" placeholder="例如，图书馆（琴园环路）或 兵器博物馆 / 兵器广场"><small>同一地点沿用已有名称，只填写大致区域。</small></label>
         <datalist id="known-areas">${data.areas.map(a => '<option value="' + esc(a.area) + '"></option>').join('')}</datalist>
         <p class="form-error" role="alert"></p><button class="btn" type="submit">${icon('time')} 开始计时</button></form>`;
     return `<form class="surface" id="survey-finish"><h2>${esc(data.active.area)} · 本次观察</h2>

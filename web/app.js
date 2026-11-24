@@ -6,6 +6,7 @@ import { initAgentWidget } from './agent.js';
 import { agentSettings } from './agent-settings.js';
 import { surveyPage } from './surveys.js';
 import { reviewPage, bindBreed } from './review.js';
+import { campusMapPage } from './campus-map.js';
 const installedAndroid = location.pathname === '/_app/index.html';
 const main = document.getElementById('content');
 let serial = 0, clean = null, session = null, recoveryCode = '', lastFilter = '', filterArea = '', filterTag = '';
@@ -44,7 +45,7 @@ function chrome(route) {
 }
 function home(data = null, unavailable = false) {
     const capture = installedAndroid && (!data || !session) ? '#device-capture' : '#capture';
-    const shortcuts = [['album','book','我的猫册'], ['surveys','pin','定点观察'], ['guide','focus','拍摄指南']];
+    const shortcuts = [['map','pin','沈理猫地图'], ['album','book','我的猫册'], ['surveys','time','定点观察'], ['guide','focus','拍摄指南']];
     if (installedAndroid) shortcuts.unshift(['device','image','本机草稿']);
     const allZero = data && Number(data.stats.cats) === 0 && Number(data.stats.active) === 0 && Number(data.stats.pending) === 0;
     const statsBlock = allZero
@@ -52,7 +53,7 @@ function home(data = null, unavailable = false) {
         : `<dl class="field-counts" aria-label="校园目击统计">${[['cats','已建档','只'],['active','近30天见过','只'],['pending','待辨认','条']].map(([key,label,unit]) => `<div><dt>${label}</dt><dd>${data ? Number(data.stats[key]) : '—'}<small>${unit}</small></dd></div>`).join('')}</dl>`;
     main.innerHTML = `<div class="field-home"><section class="field-cover">
       <img src="/assets/field-cat.jpg" alt="阳光树荫下趴在校园石阶上的猫" fetchpriority="high">
-      <div><h1>校园猫图鉴</h1><p class="cover-sub">记录每一次校园偶遇，认出每一只老朋友。</p>${btn(capture, '拍照记录', 'camera', 'cover-action')}</div>
+      <div><h1>沈阳理工校园猫图鉴</h1><p class="cover-sub">沈阳理工大学校内测试 · 记下琴园与兵器广场边的每一次相遇。</p>${btn(capture, '拍照记录', 'camera', 'cover-action')}</div>
     </section>
     <div class="home-actions-row">
       <a class="photo-lookup" href="#lookup">${icon('search')}<div><strong>照片查查</strong><span>查重 · 识别花色</span></div>${icon('arrow')}</a>
@@ -189,7 +190,7 @@ function catPage({ cat, sightings }, allCats = []) {
     });
 }
 function auth(mode, requested = 'me') {
-    const target = /^(home|atlas|agent-settings|capture(?:\/\d{1,16})?|me|review|album|surveys|cat\/\d{1,18}|encounter\/\d{1,18}(?:\/\d{1,18})?)$/.test(requested) ? requested : 'me';
+    const target = /^(home|atlas|map|agent-settings|capture(?:\/\d{1,16})?|me|review|album|surveys|cat\/\d{1,18}|encounter\/\d{1,18}(?:\/\d{1,18})?)$/.test(requested) ? requested : 'me';
     const create = mode === 'register', recover = mode === 'recover';
     const title = recover ? '找回密码' : create ? '创建观察账号' : '登录猫迹';
     main.innerHTML = `<div class="tiny">${back('#home', '返回首页')}${head(title, create ? '注册后可以提交目击，收集自己的重遇卡片。' : '')}<form class="surface" id="auth">${recover ? '' : `<div class="seg"><a class="${!create ? 'active' : ''}" href="#login/${target}">登录</a><a class="${create ? 'active' : ''}" href="#register/${target}">注册</a></div>`}
@@ -406,7 +407,12 @@ async function route() {
         const result = await api('/home');
         if (version !== serial)
             return;
-        if (page === 'atlas')
+        if (page === 'map')
+            campusMapPage(main, result.cats, areaName => {
+                sessionStorage.setItem('campuscats:prefill-area', areaName);
+                location.hash = installedAndroid && !session ? 'device-capture' : 'capture';
+            });
+        else if (page === 'atlas')
             atlas(result.cats);
         else
             home(result);

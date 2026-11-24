@@ -364,5 +364,13 @@ class OptimizationSuite(unittest.TestCase):
         self.assertTrue(recent_orphan.exists())
 
 
+    def test_sylu_preset_areas_exposed_without_polluting_canonical(self):
+        areas = self.call("/api/areas")[0]
+        self.assertEqual(areas["canonical"], [])
+        self.assertIn("兵器博物馆 / 兵器广场", areas["preset"])
+        self.assertIn("图书馆（琴园环路）", areas["areas"])
+        self.assertIn("南门（南屏中路）", areas["areas"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -48,7 +48,7 @@ export function initAgentWidget() {
         </div>
         <div class="agent-quick">
           <button type="button" data-q="全校现在记录了几只猫？">全校统计</button>
-          <button type="button" data-q="最近7天有哪些猫被目击？">近期目击</button>
+          <button type="button" data-q="兵器博物馆附近有哪些猫？">兵器广场找猫</button>
           <button type="button" data-q="本周哪些区域还缺定点观察？">定点周报</button>
         </div>
         <div id="agent-photo-bar" class="agent-photo-bar" hidden>
