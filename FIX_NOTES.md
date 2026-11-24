@@ -29,3 +29,21 @@
 2. **「照片查查」直连 `/api/identify`，消除多余 LLM 开销**（`server/app.py`、`web/capture.js`）
 3. **补齐视觉模型连通测试与推理模型兼容**（`server/providers.py`、`server/ai_vision.py`、`web/agent-settings.js`）
 4. **识图结果一键联动「猫猫助手」**（`web/capture.js`、`web/agent.js`）
+---
+
+# CampusCats v0.4.1 工程与运维细节优化
+
+基于提交 `80d0710` 完成以下工程与运维优化（保留原功能与测试全部通过，新增维护巡检测试）：
+
+1. **Nginx `X-Accel-Redirect` 透传 `ETag`**（`deploy/nginx.conf.example`）
+   - 增加 `map $upstream_http_etag $campus_media_etag`，并在 `location /_campus_media/` 关闭 Nginx 默认 `etag` 并输出上游 `ETag`，确保公开图片 1 小时后 `If-None-Match` 协商缓存真正命中 304。
+2. **补全 PWA 离线预缓存清单**（`web/sw.js`）
+   - 将 `/device.js` 加入 `shell` 预缓存数组并将缓存版本升至 `campuscats-shell-v10`，避免未访问过草稿页的用户断网时无法打开离线草稿。
+3. **4GB 内存单机 Gunicorn 默认配置优化**（`deploy/campuscats.service.example`）
+   - 调整为 `--workers 1 --threads 8`，避免开启 ONNX 编码器时多进程重复占用内存，并让进程内参考照缓存 `_REF_CACHE` 与 LLM 并发信号量 `_LLM_SLOTS` 全局共享。
+4. **CI 增加前端 JS 语法检查**（`.github/workflows/ci.yml`）
+   - 新增 `web-syntax` 任务，使用 Node.js 校验所有 `web/*.js` 语法。
+5. **自动化运维清理与孤儿媒体巡检**（新增 `server/maintenance.py`，更新 `server/backup.py`、`server/test_optimizations.py`）
+   - `maintenance.py` 默认只读巡检过期的 `sessions`/`throttle` 记录及超过宽限期的未引用图片，传 `--apply` 安全清理；`backup.py` 快照同步清理 `throttle` 表。
+6. **GitHub Releases 自动发布工作流**（新增 `.github/workflows/release.yml`）
+   - 推送 `v*` 标签（如 `git tag v0.4.1 && git push origin v0.4.1`）自动创建 GitHub Release 并附带安装包，后续可将 APK/iOS 压缩包从 Git 主干移出以减小仓库体积。

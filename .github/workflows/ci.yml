@@ -25,3 +25,20 @@ jobs:
           fi
       - name: Run unit test suite
         run: python -B -m unittest discover -s server -p "test_*.py" -v
+
+  web-syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Check frontend JS syntax
+        run: |
+          for f in web/*.js; do
+            if [ "$f" = "web/sw.js" ]; then
+              node --check "$f"
+            else
+              node --input-type=module --check < "$f"
+            fi
+          done

@@ -333,5 +333,36 @@ class OptimizationSuite(unittest.TestCase):
             self.assertIn("auto_archive", report)
 
 
+    def test_maintenance_prunes_expired_rows_and_stale_orphans(self):
+        import time
+        from maintenance import inspect_and_prune
+
+        now = int(time.time())
+        with closing(connect(self.app.db_path)) as db, db:
+            db.execute("INSERT INTO sessions(token,user_id,expires) VALUES('expired-tok',1,?)", (now - 10,))
+            db.execute("INSERT INTO throttle(bucket,expires,hits) VALUES('old-bucket',?,3)", (now - 10,))
+
+        stale_orphan = self.app.media / "deadbeef-stale.jpg"
+        stale_orphan.write_bytes(b"stale-orphan")
+        os.utime(stale_orphan, (now - 7200, now - 7200))
+
+        recent_orphan = self.app.media / "deadbeef-recent.jpg"
+        recent_orphan.write_bytes(b"recent-orphan")
+
+        dry = inspect_and_prune(self.app.data, self.app.media, apply=False, grace_seconds=3600, now=now)
+        self.assertFalse(dry["applied"])
+        self.assertGreaterEqual(dry["expired_sessions"], 1)
+        self.assertGreaterEqual(dry["expired_throttle"], 1)
+        self.assertEqual(dry["orphan_files"], 1)
+        self.assertEqual(dry["skipped_recent_orphans"], 1)
+        self.assertTrue(stale_orphan.exists())
+
+        done = inspect_and_prune(self.app.data, self.app.media, apply=True, grace_seconds=3600, now=now)
+        self.assertTrue(done["applied"])
+        self.assertEqual(done["deleted_files"], 1)
+        self.assertFalse(stale_orphan.exists())
+        self.assertTrue(recent_orphan.exists())
+
+
 if __name__ == "__main__":
     unittest.main()

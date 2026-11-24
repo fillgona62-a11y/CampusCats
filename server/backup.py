@@ -31,6 +31,7 @@ def backup(data, media, destination):
                                      "UNION SELECT image FROM thumbnails").fetchall()
                 # Restoring a backup should require everyone to sign in again and reconfigure encrypted API keys.
                 db.execute("DELETE FROM sessions")
+                db.execute("DELETE FROM throttle")
                 db.execute("DELETE FROM agent_providers")
                 db.commit()
             with ZipFile(temp,"w") as archive:
