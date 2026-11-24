@@ -9,6 +9,7 @@ from collections import Counter, OrderedDict, defaultdict
 from datetime import datetime, timedelta, timezone
 
 import ai_vision
+import face_match
 from face_match import automatic_match
 from media import Problem, canonical_photo, prepare, save_media, validate_boxes
 from vision import MODEL_VERSION, analyze_crop, assess_db_match, pixel_box, rank_candidates
@@ -181,9 +182,10 @@ def references(db):
     return parsed
 
 
-def matched_profiles(analysis, refs, cats):
+def matched_profiles(analysis, refs, cats, *, limit=3, area=""):
+    cat_areas = {cid: c.get("area", "") for cid, c in cats.items()}
     candidates = []
-    for match in rank_candidates(analysis, refs):
+    for match in rank_candidates(analysis, refs, limit=limit, area=area, cat_areas=cat_areas):
         target = match["reference_id"]
         candidates.append(dict(
             cats[match["cat_id"]],
@@ -205,7 +207,28 @@ def breed_hint(candidates):
     return {"label":next(iter(labels)), "kind":"library_comparison", "cat_ids":list(verified)}
 
 
-def identify(db, body):
+def _load_candidate_crops(candidates, refs, media_dir):
+    if media_dir is None:
+        return []
+    from PIL import Image
+    ref_by_id = {ref.get("_reference_id"): ref for _, ref in refs if ref.get("_reference_id") is not None}
+    items = []
+    for cand in candidates[:3]:
+        ref = ref_by_id.get(cand.get("reference_id"))
+        crop_img = None
+        if ref and ref.get("frame") and ref.get("box"):
+            ref_path = Path(media_dir) / ref["frame"]
+            if ref_path.is_file():
+                try:
+                    with Image.open(ref_path) as im:
+                        crop_img = im.crop(pixel_box(im, ref["box"])).convert("RGB")
+                except OSError:
+                    crop_img = None
+        items.append(dict(cand, crop=crop_img))
+    return items
+
+
+def identify(db, body, media_dir=None):
     boxes = validate_boxes(body.get("boxes"))
     area = area_field(body, "area", 80) if body.get("area") is not None else ""
     _, image = canonical_photo(body.get("photo"))
@@ -218,12 +241,35 @@ def identify(db, body):
     results = []
     for box in boxes:
         analysis = analyze_crop(image, box)
-        candidates = matched_profiles(analysis, refs, cats)
         crop = image.crop(pixel_box(image, box)).convert("RGB")
-        record_status = assess_db_match(candidates, reference_count, area=area, usable=analysis["usable"])
+        # Stage 1: broad recall (up to 5 candidates), then Stage 2: SIFT face+body reranking -> Top 3
+        candidates = matched_profiles(analysis, refs, cats, limit=5, area=area)
+        if analysis["usable"] and candidates and media_dir is not None:
+            candidates = face_match.rerank_with_local_features(crop, candidates, refs, media_dir)
+        candidates = candidates[:3]
+        allow_remote = body.get("cloud_photo") is True
         remaining = deadline - time.monotonic()
-        ai_profile = ai_vision.classify_cat_crop(crop, allow_remote=body.get("cloud_photo") is True and remaining >= 1,
-                                                 timeout=max(1, remaining)) if analysis["usable"] else None
+        # Stage 3: optional VLM pairwise side-by-side verification
+        vlm_compare = None
+        if analysis["usable"] and allow_remote and candidates and media_dir is not None and remaining >= 3:
+            cand_crops = _load_candidate_crops(candidates, refs, media_dir)
+            vlm_compare = ai_vision.compare_candidates_vlm(
+                crop, cand_crops, allow_remote=True, timeout=min(12, max(2, remaining - 2))
+            )
+            if vlm_compare and vlm_compare.get("verdict") == "same_cat":
+                idx = vlm_compare.get("best_candidate_index")
+                conf = float(vlm_compare.get("confidence", 0.0))
+                if idx and 1 <= idx <= len(candidates) and conf >= 0.60:
+                    picked = candidates.pop(idx - 1)
+                    picked = dict(picked, similarity=round(max(float(picked.get("similarity", 0.0)), min(0.98, 0.55 + 0.43 * conf)), 4))
+                    candidates.insert(0, picked)
+        record_status = assess_db_match(
+            candidates, reference_count, area=area, usable=analysis["usable"], vlm_compare=vlm_compare
+        )
+        remaining = deadline - time.monotonic()
+        ai_profile = ai_vision.classify_cat_crop(
+            crop, allow_remote=allow_remote and remaining >= 1, timeout=max(1, remaining)
+        ) if analysis["usable"] else None
         results.append({
             "box": box,
             "quality": analysis["warnings"],
@@ -233,6 +279,7 @@ def identify(db, body):
             "breed_hint": breed_hint(candidates),
             "record_status": record_status,
             "ai_profile": ai_profile,
+            "vlm_compare": vlm_compare,
         })
     return {"results": results, "reference_count": reference_count}
 

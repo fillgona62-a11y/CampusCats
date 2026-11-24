@@ -245,3 +245,114 @@ def classify_cat_crop(crop, *, allow_remote=False, timeout=None):
         except (OSError, ValueError, KeyError, IndexError, TypeError, AttributeError):
             pass
     return _heuristic_profile(crop)
+
+
+def _make_comparison_sheet(query_crop, candidate_items):
+    """Build a crisp horizontal comparison sheet: [Query | Cand 1 | Cand 2 | Cand 3]."""
+    from PIL import Image, ImageDraw, ImageOps
+
+    panels = [("NEW", query_crop)]
+    for idx, item in enumerate(candidate_items[:3], 1):
+        if item.get("crop") is not None:
+            panels.append((f"#{idx}", item["crop"]))
+    if len(panels) < 2:
+        return None
+
+    tile = 256
+    header = 26
+    gap = 6
+    width = len(panels) * tile + (len(panels) + 1) * gap
+    height = tile + header + gap * 2
+    sheet = Image.new("RGB", (width, height), (245, 245, 240))
+    draw = ImageDraw.Draw(sheet)
+    for i, (label, im) in enumerate(panels):
+        x = gap + i * (tile + gap)
+        y = gap + header
+        fitted = ImageOps.fit(im.convert("RGB"), (tile, tile), method=Image.Resampling.LANCZOS)
+        sheet.paste(fitted, (x, y))
+        bg = (217, 130, 43) if i == 0 else (45, 68, 56)
+        draw.rectangle([x, gap, x + tile, gap + header - 2], fill=bg)
+        draw.text((x + 8, gap + 6), label, fill=(255, 255, 255))
+    return sheet
+
+
+def compare_candidates_vlm(query_crop, candidate_items, *, allow_remote=False, timeout=None):
+    """Use Vision LLM on a stitched side-by-side comparison sheet to verify if NEW matches #1/#2/#3."""
+    if not allow_remote or not candidate_items:
+        return None
+    cfg = llm_config()
+    if not (cfg["enabled"] and cfg["vision_model"]):
+        return None
+    sheet = _make_comparison_sheet(query_crop, candidate_items)
+    if sheet is None:
+        return None
+    b64 = _encode_jpeg_b64(sheet, max_side=1024)
+    cand_lines = []
+    for idx, item in enumerate(candidate_items[:3], 1):
+        cand_lines.append(f"#{idx}: {item.get('name', '未命名')}（{item.get('coat') or '花色待补'}，常出没：{item.get('area') or '未知'}）")
+    prompt = (
+        "你是一位校园流浪猫个体辨认专家。上图最左侧橙色标题「NEW」是刚拍到的待识别猫，右侧「#1」「#2」「#3」是图鉴里的候选猫参考照：\n"
+        + "\n".join(cand_lines)
+        + "\n请重点逐项对比：额头纹/M纹走向、鼻梁与嘴周白斑边界、耳朵是否剪耳/缺口、胸前与四肢花纹边界，判断 NEW 是否与其中某一只为同一只猫。"
+        "严格输出 JSON，不要包含额外解释：\n"
+        '{\n'
+        '  "verdict": "same_cat | different_cat | uncertain",\n'
+        '  "best_candidate_index": 1 或 2 或 3 或 null,\n'
+        '  "confidence": 0.0 到 1.0 之间的小数,\n'
+        '  "matching_features": ["最多3条一致的局部花纹特征"],\n'
+        '  "differences": ["最多3条观察到的差异或不确定点"],\n'
+        '  "reason": "一句50字以内的中文比对结论"\n'
+        '}'
+    )
+    eff_cfg = dict(cfg, timeout=min(cfg["timeout"], timeout)) if timeout is not None else cfg
+    payload = {
+        "model": eff_cfg["vision_model"],
+        "temperature": 0.1,
+        "max_tokens": 360,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+                ],
+            }
+        ],
+    }
+    try:
+        if eff_cfg.get("scope"):
+            payload.pop("temperature", None)
+            raw = providers.completion(eff_cfg, payload)
+        else:
+            raw = _environment_completion(eff_cfg, payload)
+        content = raw["choices"][0]["message"]["content"]
+        if isinstance(content, list):
+            content = "".join(part.get("text", "") for part in content if isinstance(part, dict))
+        parsed = _extract_json(content)
+        if not parsed:
+            return None
+        verdict = str(parsed.get("verdict", "uncertain")).lower()
+        if verdict not in ("same_cat", "different_cat", "uncertain"):
+            verdict = "uncertain"
+        idx = parsed.get("best_candidate_index")
+        try:
+            idx = int(idx) if idx is not None else None
+        except (TypeError, ValueError):
+            idx = None
+        if idx is not None and not (1 <= idx <= len(candidate_items[:3])):
+            idx = None
+        try:
+            conf = max(0.0, min(1.0, float(parsed.get("confidence", 0.5))))
+        except (TypeError, ValueError):
+            conf = 0.5
+        return {
+            "source": "vlm",
+            "verdict": verdict,
+            "best_candidate_index": idx,
+            "confidence": round(conf, 3),
+            "matching_features": [str(x).strip()[:40] for x in (parsed.get("matching_features") or []) if str(x).strip()][:3],
+            "differences": [str(x).strip()[:40] for x in (parsed.get("differences") or []) if str(x).strip()][:3],
+            "reason": str(parsed.get("reason", "")).strip()[:120],
+        }
+    except (OSError, ValueError, KeyError, IndexError, TypeError, AttributeError):
+        return None

@@ -155,13 +155,22 @@ export function capturePage(main, onSuccess, {saveLocal, draft, lookupOnly = fal
     }
     function refCaption(cat) {
         const pct = typeof cat.similarity === 'number' ? ` · 匹配度约 ${Math.round(cat.similarity * 100)}%` : '';
-        return '候选参考照 · ' + esc(cat.name) + pct + (cat.breed_status === 'verified' ? ' · ' + esc(cat.breed) + '（维护者已核验）' : '');
+        const pts = cat.local_inliers >= 12 ? ` · 花纹几何命中 ${Number(cat.local_inliers)} 点` : '';
+        return '候选参考照 · ' + esc(cat.name) + pct + pts + (cat.breed_status === 'verified' ? ' · ' + esc(cat.breed) + '（维护者已核验）' : '');
+    }
+    function vlmCompareCard(vc) {
+        if (!vc || vc.source !== 'vlm') return '';
+        const labelMap = { same_cat: '视觉复核 · 高度疑似同一只', different_cat: '视觉复核 · 存在明显差异', uncertain: '视觉复核 · 建议人工再核对' };
+        const tone = vc.verdict === 'same_cat' ? 'ok' : vc.verdict === 'different_cat' ? 'warn' : 'muted';
+        const matchList = (vc.matching_features || []).length ? `<p class="meta">一致特征：${vc.matching_features.map(esc).join('、')}</p>` : '';
+        const diffList = (vc.differences || []).length ? `<p class="meta">差异/待核对：${vc.differences.map(esc).join('、')}</p>` : '';
+        return `<div class="surface" style="margin:10px 0;padding:12px 14px"><p><strong class="pill ${tone}">${labelMap[vc.verdict] || '视觉复核'}</strong></p>${vc.reason ? `<p style="margin-top:6px">${esc(vc.reason)}</p>` : ''}${matchList}${diffList}</div>`;
     }
     function previewResults(data) {
         suggestions = Array(data.results.length).fill(null);
         $('#results').innerHTML = `<hr class="divider"><h2>查图与识别结果</h2><p>${data.reference_count ? '已比对图鉴参考照，可查看每只猫的候选档案。' : '图鉴还没有可比对的参考照。提交目击后，维护者可以为第一只猫建档。'}</p>` + data.results.map((r, i) => {
             const cats = r.candidates || [], warnings = r.warnings || r.quality || [];
-            return `<section class="sheet"><h3>猫 ${i + 1}</h3>${recordBadge(r.record_status)}${aiProfileCard(r.ai_profile)}${r.breed_hint?.label ? `<p class="advice">图鉴相似档案的品种线索（待核实） · ${esc(r.breed_hint.label)}。至少两只相似候选的档案记有该品种，仍需核对这只猫的来源。</p>` : ''}<div class="compare"><figure>${img(cropData(frame, r.box), '本次取景')}<figcaption>本次取景</figcaption></figure>${cats[0] ? `<figure id="ref-${i}">${img(cats[0].photo_url, cats[0].name)}<figcaption>${refCaption(cats[0])}</figcaption></figure>` : ''}</div>${warnings.length ? `<p class="advice">${esc(warnings.join(' '))}</p>` : ''}${cats.length ? `<label class="field"><span>对照候选参考照</span><select data-ref="${i}">${cats.map((cat, j) => `<option value="${j}">${esc(cat.name)} · ${esc(cat.coat || '花色待补')}${typeof cat.similarity === 'number' ? `（约 ${Math.round(cat.similarity * 100)}%）` : ''}</option>`).join('')}</select></label><div class="actions" ${lookupOnly || saveLocal ? 'hidden' : ''}><button type="button" class="btn light" data-pick="${i}">建议匹配当前候选</button><button type="button" class="btn ghost" data-clear="${i}">暂时认不出</button></div>` : '<p class="hint">目前没有可用候选。</p>'}<div class="actions"><button type="button" class="btn ghost" data-ask-agent="${i}">问问猫猫助手</button></div><p class="hint" id="selection-${i}" ${lookupOnly || saveLocal ? 'hidden' : ''}>提交意向 · 待辨认</p></section>`;
+            return `<section class="sheet"><h3>猫 ${i + 1}</h3>${recordBadge(r.record_status)}${vlmCompareCard(r.vlm_compare)}${aiProfileCard(r.ai_profile)}${r.breed_hint?.label ? `<p class="advice">图鉴相似档案的品种线索（待核实） · ${esc(r.breed_hint.label)}。至少两只相似候选的档案记有该品种，仍需核对这只猫的来源。</p>` : ''}<div class="compare"><figure>${img(cropData(frame, r.box), '本次取景')}<figcaption>本次取景</figcaption></figure>${cats[0] ? `<figure id="ref-${i}">${img(cats[0].photo_url, cats[0].name)}<figcaption>${refCaption(cats[0])}</figcaption></figure>` : ''}</div>${warnings.length ? `<p class="advice">${esc(warnings.join(' '))}</p>` : ''}${cats.length ? `<label class="field"><span>对照候选参考照</span><select data-ref="${i}">${cats.map((cat, j) => `<option value="${j}">${esc(cat.name)} · ${esc(cat.coat || '花色待补')}${typeof cat.similarity === 'number' ? `（约 ${Math.round(cat.similarity * 100)}%）` : ''}</option>`).join('')}</select></label><div class="actions" ${lookupOnly || saveLocal ? 'hidden' : ''}><button type="button" class="btn light" data-pick="${i}">建议匹配当前候选</button><button type="button" class="btn ghost" data-clear="${i}">暂时认不出</button></div>` : '<p class="hint">目前没有可用候选。</p>'}<div class="actions"><button type="button" class="btn ghost" data-ask-agent="${i}">问问猫猫助手</button></div><p class="hint" id="selection-${i}" ${lookupOnly || saveLocal ? 'hidden' : ''}>提交意向 · 待辨认</p></section>`;
         }).join('');
         $('#results').querySelectorAll('[data-ref]').forEach(select => select.onchange = () => {
             const index = Number(select.dataset.ref), cat = data.results[index].candidates[Number(select.value)];

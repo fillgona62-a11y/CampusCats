@@ -284,7 +284,7 @@ class App:
                 accounts.throttle(db, f"agent:{actor}", 60, 3600)
                 return agent.chat(db, read_json(env, 9 * 1024 * 1024))
             accounts.throttle(db, f"photo:{actor}", 180, 3600)
-            return identify(db, read_json(env, 9 * 1024 * 1024))
+            return identify(db, read_json(env, 9 * 1024 * 1024), media_dir=self.media)
         uid = require(user)
         is_photo = path == "/api/sightings"
         if is_photo:
