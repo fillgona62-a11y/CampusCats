@@ -2,7 +2,7 @@ import SwiftUI
 import SafariServices
 
 // Set this to the school's HTTPS origin when distributing a school-specific build.
-private let schoolOrigin = ""
+private let schoolOrigin = "https://thickearth.online"
 
 @main
 struct CampusCatsApp: App {
