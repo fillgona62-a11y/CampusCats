@@ -1,6 +1,6 @@
-# 猫迹 · 沈阳理工大学校园猫图鉴（v0.4.5-SYLU）
+# 猫迹 · 沈阳理工大学校园猫图鉴（v0.5.1-SYLU）
 
-猫迹帮同学记录在校园里遇到的猫，当前面向**沈阳理工大学（浑南校区 · 南屏中路 6 号）开展校内测试。同一只猫可以有多个别名和多条目击记录，图鉴只计一只。游客可以直接浏览图鉴、通过内置沈理校园猫地图**按地标找猫、用「照片查查」比对查重与识别花色，或向「猫猫助手」查询校园猫动态；注册登录后可以提交目击、点亮个人猫册、参与校园定点观察、补充别名，以及生成带二维码的高清相遇卡与重遇卡。
+猫迹帮同学记录在校园里遇到的猫，当前面向**沈阳理工大学（浑南校区 · 南屏中路 6 号）**开展校内测试。同一只猫可以有多个别名和多条目击记录，图鉴只计一只。游客可以直接浏览图鉴、通过内置**沈理校园猫地图**按地标找猫、用「照片查查」比对查重与识别花色，或向「猫猫助手」查询校园猫动态；注册登录后可以提交目击、点亮个人猫册、参与校园定点观察、补充别名，以及生成带二维码的高清相遇卡与重遇卡。
 
 在线访问：[**打开沈阳理工大学校园猫图鉴（thickearth.online）**](https://thickearth.online/)
 
@@ -8,35 +8,33 @@
 
 * **安卓手机（Android 8.0 及以上）**
 
-  * **下载源一（官网直连，国内推荐）**：[从官网下载 CampusCats-Android.apk](https://www.google.com/search?q=https://thickearth.online/downloads/CampusCats-Android.apk)
+  * **下载源一（官网直连，国内推荐）**：[从官网下载 CampusCats-Android.apk](https://thickearth.online/downloads/CampusCats-Android.apk)
 
-  * **下载源二（GitHub 仓库源）**：[从 GitHub 下载 CampusCats-Android.apk](https://www.google.com/search?q=https://github.com/fillgona62-a11y/CampusCats/raw/main/downloads/CampusCats-Android.apk)（仓库内路径：`downloads/CampusCats-Android.apk`）
+  * **下载源二（GitHub 仓库源）**：[从 GitHub 下载 CampusCats-Android.apk](https://github.com/fillgona62-a11y/CampusCats/raw/main/downloads/CampusCats-Android.apk)（仓库内路径：`downloads/CampusCats-Android.apk`）
 
-  * **使用与升级说明**：安装后默认连接 `https://thickearth.online`（网页内容随线上 `v0.4.5-SYLU` 自动同步更新），首页点「拍照记录」即可拍照或选图；无网或未登录时可先存为**本机草稿**，联网登录后再提交。若学校后续更换域名，可在「我的手记」或离线重连页展开「切换校园站点地址」直接修改。*注：0.4.0 起改用持久化正式签名证书，若此前安装过早期 0.2.x / 0.3.0 测试包提示签名不一致，请先提交本机草稿并卸载旧包后安装一次，后续版本均可直接覆盖更新。*
+  * **使用与升级说明**：安装后默认连接 `https://thickearth.online`（网页内容随线上 `v0.5.1-SYLU` 自动同步更新），首页点「拍照记录」即可拍照或选图；无网或未登录时可先存为**本机草稿**，联网登录后再提交。若学校后续更换域名，可在「我的手记」或离线重连页展开「切换校园站点地址」直接修改。*注：0.4.0 起改用持久化正式签名证书，若此前安装过早期 0.2.x / 0.3.0 测试包提示签名不一致，请先提交本机草稿并卸载旧包后安装一次，后续版本均可直接覆盖更新。*
 
-* **iPhone / iPad（PWA 桌面版）** 用 Safari 打开 [https\://thickearth.online/](https://thickearth.online/)，点底栏「分享」→「添加到主屏幕」，即可从桌面图标全屏进入。
+* **iPhone / iPad（PWA 桌面版）** 用 Safari 打开 <https://thickearth.online/>，点底栏「分享」→「添加到主屏幕」，即可从桌面图标全屏进入。
 
-* **iOS 工程源码下载** 仓库提供已预设 `https://thickearth.online` 地址的 Xcode 工程包（尚无直接安装的签名 IPA）。在 Mac 上解压后用 Xcode 打开 `CampusCats.xcodeproj`，在「Signing & Capabilities」选择自己的开发团队即可真机运行：[下载 iOS 工程 ZIP](https://www.google.com/search?q=https://github.com/fillgona62-a11y/CampusCats/raw/main/downloads/CampusCats-iOS-Xcode.zip)（仓库内路径：`downloads/CampusCats-iOS-Xcode.zip`）。
+* **iOS 工程源码下载** 仓库提供已预设 `https://thickearth.online` 地址的 Xcode 工程包（尚无直接安装的签名 IPA）。在 Mac 上解压后用 Xcode 打开 `CampusCats.xcodeproj`，在「Signing & Capabilities」选择自己的开发团队即可真机运行：[下载 iOS 工程 ZIP](https://github.com/fillgona62-a11y/CampusCats/raw/main/downloads/CampusCats-iOS-Xcode.zip)（仓库内路径：`downloads/CampusCats-iOS-Xcode.zip`）。
 
-## 最新功能与近期更新（v0.4.0 \~ v0.4.5-SYLU）
+## 最新功能与近期更新（v0.4.0 ~ v0.5.1-SYLU）
+
+### v0.5.0 ~ v0.5.1-SYLU（自动多猫检测 + 高德精确地图与时空轨迹版）
+- **12.2 MB `YOLOv8n` 自动多猫检测 + 23.3 MB `DINOv2-small` 两阶段识别**：新增 `server/detector.py` 与 `POST /api/detect`，拍照或选图后自动框出画面中的全部猫咪（支持一图多猫，单张 ~120 ms），紧贴猫身裁去背景后再逐只送入三视角 `DINOv2-small` 查重；云端 8 猫 25 图跨天实测 Top-1 从 84.0% 提升至 **96.0%**。
+- **拍照询问位置权限 & 猫猫时空关联**：拍照/选图自动请求定位权限，数据库记录每条目击的精确 `latitude`、`longitude`、`location_accuracy` 与 `observed_at` 时刻，并在猫档案时间线展示；安卓客户端（`AndroidManifest.xml` / `MainActivity.java`）同步补齐定位授权回调。
+- **高德地图 JS API 2.0 实景地图与轨迹**：配置 `AMAP_JS_KEY` / `AMAP_SECURITY_CODE` 后，自动启用沈阳理工大学高德真实底图与卫星图切换、WGS84→GCJ02 坐标纠偏、精确猫猫图钉弹窗、单只猫按时间顺序的时空轨迹折线以及拍照逆地理编码精确地址回填；未配置或离线时自动兜底回退至内置沈理 SVG 地图。
 
 ### v0.4.5-SYLU（DINOv2 三视角 TTA 与多模型融合识别版）
-
-* **三视角多尺度 TTA \+ `DINOv2-small INT8` 最优方案**：经云端跨天多角度实测对比（92.9% Top-1 准确率、分离间隔 \+0.230、单张仅 207 ms），`server/encoder.py` 升级为 **原图 \+ 水平镜像 \+ 78% 中心聚焦裁切** 三视角融合，校准生产距离阈值至 `0.45`，自动削弱边缘草地/地砖背景干扰。
-
-* **支持多模型逗号拼接融合**：`CAMPUSCATS_ENCODER` 原生支持单模型或 `model1.onnx,model2.onnx` 多模型特征融合，方便后续无缝叠加沈阳理工本校微调模型。
-
-* **免 PyTorch 一键安装 23 MB 量化模型**：`deploy/install_reid_model.py` 支持直接从国内镜像下载 `dinov2-small` 量化 ONNX，无需安装 2 GB PyTorch 即可在 4 GB CPU 服务器上跑满深度识猫引擎。
+- **三视角多尺度 TTA + `DINOv2-small INT8` 最优方案**：经云端跨天多角度实测对比（92.9% Top-1 准确率、分离间隔 +0.230、单张仅 207 ms），`server/encoder.py` 升级为 **原图 + 水平镜像 + 78% 中心聚焦裁切** 三视角融合，校准生产距离阈值至 `0.45`，自动削弱边缘草地/地砖背景干扰。
+- **支持多模型逗号拼接融合**：`CAMPUSCATS_ENCODER` 原生支持单模型或 `model1.onnx,model2.onnx` 多模型特征融合，方便后续无缝叠加沈阳理工本校微调模型。
+- **免 PyTorch 一键安装 23 MB 量化模型**：`deploy/install_reid_model.py` 支持直接从国内镜像下载 `dinov2-small` 量化 ONNX，无需安装 2 GB PyTorch 即可在 4 GB CPU 服务器上跑满深度识猫引擎。
 
 ### v0.4.4-SYLU（四层融合个体识别升级版）
-
-* **光照与镜像鲁棒局部特征（`coat-texture-2`）**：新增轻度 Gray-World 白平衡与亮度拉伸抑制逆光/阴影偏色，升级椭圆前景加权 5 分区 HSV \+ LBP \+ HOG 梯度方向特征，并支持水平镜像不变检索、多参考照共识融合与校园区域微弱先验。
-
-* **倾角正脸与全身花纹 SIFT+RANSAC 重排**：正脸检测新增 ±12° 歪头容错与 CLAHE 暗毛对比度增强；侧身/背影照新增全身花纹 SIFT+RANSAC 候选重排，同时保持双日正脸自动归档的严格防误判阈值。
-
-* **多图拼图 VLM 跨图复核**：配置视觉大模型后，「照片查查」自动将新照与候选参考照拼接成带编号对照图，逐项比对额头纹、鼻梁白斑、剪耳与四肢花纹，直接输出核对理由并重排候选。
-
-* **ONNX 深度 Re-ID TTA 与国内一键安装脚本**：`server/encoder.py` 升级水平镜像双视角 TTA 特征融合；新增 `deploy/install_reid_model.py`（默认国内 `hf-mirror.com` 镜像，支持一键导出 `MegaDescriptor-T-224` 动物个体识别 ONNX 模型）与 `server/maintenance.py --reindex-vision` 一键特征索引重建。
+- **光照与镜像鲁棒局部特征（`coat-texture-2`）**：新增轻度 Gray-World 白平衡与亮度拉伸抑制逆光/阴影偏色，升级椭圆前景加权 5 分区 HSV + LBP + HOG 梯度方向特征，并支持水平镜像不变检索、多参考照共识融合与校园区域微弱先验。
+- **倾角正脸与全身花纹 SIFT+RANSAC 重排**：正脸检测新增 ±12° 歪头容错与 CLAHE 暗毛对比度增强；侧身/背影照新增全身花纹 SIFT+RANSAC 候选重排，同时保持双日正脸自动归档的严格防误判阈值。
+- **多图拼图 VLM 跨图复核**：配置视觉大模型后，「照片查查」自动将新照与候选参考照拼接成带编号对照图，逐项比对额头纹、鼻梁白斑、剪耳与四肢花纹，直接输出核对理由并重排候选。
+- **ONNX 深度 Re-ID TTA 与国内一键安装脚本**：`server/encoder.py` 升级水平镜像双视角 TTA 特征融合；新增 `deploy/install_reid_model.py`（默认国内 `hf-mirror.com` 镜像，支持一键导出 `MegaDescriptor-T-224` 动物个体识别 ONNX 模型）与 `server/maintenance.py --reindex-vision` 一键特征索引重建。
 
 ### v0.4.3-SYLU（沈阳理工大学校内测试版）
 
@@ -60,7 +58,7 @@
 
 * **高清二维码重遇卡与定点观察**：跨日重遇自动解锁「重遇卡片」，支持 2x 高清渲染与扫码直达猫档案；支持 10 分钟定点观察计时与防公式注入的周报 CSV 导出。
 
-* **生产部署加固（v0.4.1）**：补齐 Gunicorn 单进程多线程配置、Nginx `ETag` / `304` 透传、PWA 离线预缓存 `/device.js`、运维巡检脚本（`server/maintenance.py`）与 CI 前端语法校验。详见 [版本更新说明](https://www.google.com/search?q=FIX_NOTES.md)。
+* **生产部署加固（v0.4.1）**：补齐 Gunicorn 单进程多线程配置、Nginx `ETag` / `304` 透传、PWA 离线预缓存 `/device.js`、运维巡检脚本（`server/maintenance.py`）与 CI 前端语法校验。详见 [版本更新说明](FIX_NOTES.md)。
 
 ## 本地启动
 
@@ -70,10 +68,9 @@
 python -m pip install -r server/requirements.txt
 python server/app.py --port 8765
 
-
 ```
 
-初次启动时，主页已建档数量为 0，照片和账号数据保存在 `instance/`。Windows 上也可以在安装好依赖后直接双击 `start.cmd`。[打开本机图鉴](https://www.google.com/search?q=http://127.0.0.1:8765)
+初次启动时，主页已建档数量为 0，照片和账号数据保存在 `instance/`。Windows 上也可以在安装好依赖后直接双击 `start.cmd`。[打开本机图鉴](http://127.0.0.1:8765)
 
 ## 从第一张照片开始
 
@@ -88,22 +85,20 @@ python server/app.py --port 8765
 ```
 python server/app.py --promote reviewer@example.edu
 
-
 ```
 
 ## 识别与自动归档
 
 系统默认按框内毛色、明暗分布和局部二值纹理检索，最多展示三只候选猫并附上实际命中的历史参考照；画面过暗、过曝、模糊或主体像素不足时会提示补拍。
 
-服务端安装可选的 OpenCV 后，当新照片与同一档案**两个不同日期的人工核实照**在正脸局部特征（SIFT \+ RANSAC 几何一致性）上充分吻合时，会自动归档关联到该猫档案；其余目击保留待辨认。若人工参考照后续被重审撤回，依赖它的自动归档记录会自动退回待辨认队列：
+服务端安装可选的 OpenCV 后，当新照片与同一档案**两个不同日期的人工核实照**在正脸局部特征（SIFT + RANSAC 几何一致性）上充分吻合时，会自动归档关联到该猫档案；其余目击保留待辨认。若人工参考照后续被重审撤回，依赖它的自动归档记录会自动退回待辨认队列：
 
 ```
 python -m pip install "opencv-python-headless>=4.11,<5"
 
-
 ```
 
-品种可根据多只已核验相似档案提供待核实线索，正式核验需由维护者登记可复查来源。跨日个体检索准确率与自动归档指标可通过本校照片离线评测，详见 [识别复测指南](https://www.google.com/search?q=evaluate/README.md)。
+品种可根据多只已核验相似档案提供待核实线索，正式核验需由维护者登记可复查来源。跨日个体检索准确率与自动归档指标可通过本校照片离线评测，详见 [识别复测指南](evaluate/README.md)。
 
 ## 自行构建与部署
 
@@ -111,4 +106,4 @@ python -m pip install "opencv-python-headless>=4.11,<5"
 
 * **构建 iOS 客户端**：工程源码位于 `mobile/ios/`，可在 `App.swift` 的 `schoolOrigin` 中预设学校 HTTPS 地址。
 
-* **服务端部署与运维**：单机与双机分离部署、Nginx 反向代理缓存、一致性备份恢复及并发压测方法见 [试点部署指南](https://www.google.com/search?q=deploy/README.md)。
+* **服务端部署与运维**：单机与双机分离部署、Nginx 反向代理缓存、一致性备份恢复及并发压测方法见 [试点部署指南](deploy/README.md)。

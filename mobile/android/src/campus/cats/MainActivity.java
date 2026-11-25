@@ -21,10 +21,12 @@ import java.util.Arrays;
 
 public final class MainActivity extends Activity {
     private static final String ENTRY = "/_app/index.html";
-    private static final int CAMERA = 11, PICK = 12, EXPORT = 13, TAKE = 14;
+    private static final int CAMERA = 11, PICK = 12, EXPORT = 13, TAKE = 14, LOCATION = 15;
     private WebView web;
     private Uri origin, captureUri;
     private PermissionRequest cameraRequest;
+    private GeolocationPermissions.Callback geoCallback;
+    private String geoOrigin;
     private ValueCallback<Uri[]> chooser;
     private File exportFile;
     private boolean systemCamera;
@@ -71,6 +73,7 @@ public final class MainActivity extends Activity {
         WebSettings settings = web.getSettings();
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
+        settings.setGeolocationEnabled(true);
         settings.setAllowFileAccess(false);
         settings.setAllowContentAccess(false);
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
@@ -114,7 +117,7 @@ public final class MainActivity extends Activity {
             try {
                 WebResourceResponse res = new WebResourceResponse(mime, mime.startsWith("image/") ? null : "UTF-8", getAssets().open(name));
                 if (name.equals("index.html")) res.setResponseHeaders(java.util.Collections.singletonMap("Content-Security-Policy",
-                    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' blob: data:; frame-src 'none'; object-src 'none'; base-uri 'none'"));
+                    "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://*.amap.com https://*.autonavi.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://*.amap.com https://*.autonavi.com; media-src 'self' blob:; connect-src 'self' blob: data: https://*.amap.com https://*.autonavi.com; frame-src 'none'; object-src 'none'; base-uri 'none'"));
                 return res;
             } catch (IOException ex) { return missing(); }
         }
@@ -128,6 +131,17 @@ public final class MainActivity extends Activity {
         }
         @Override public void onPermissionRequestCanceled(PermissionRequest req) {
             if (cameraRequest == req) cameraRequest = null;
+        }
+        @Override public void onGeolocationPermissionsShowPrompt(String reqOrigin, GeolocationPermissions.Callback callback) {
+            if (!trusted(Uri.parse(reqOrigin))) { callback.invoke(reqOrigin, false, false); return; }
+            if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                || checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+                callback.invoke(reqOrigin, true, false);
+            } else {
+                geoOrigin = reqOrigin;
+                geoCallback = callback;
+                requestPermissions(new String[]{Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION}, LOCATION);
+            }
         }
         @Override public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> callback, FileChooserParams params) {
             completeChooser(null);
@@ -181,6 +195,12 @@ public final class MainActivity extends Activity {
     @Override public void onRequestPermissionsResult(int request, String[] permissions, int[] grants) {
         super.onRequestPermissionsResult(request,permissions,grants);
         if (request == CAMERA) cameraDecision(grants.length > 0 && grants[0] == PackageManager.PERMISSION_GRANTED);
+        if (request == LOCATION && geoCallback != null) {
+            boolean ok = grants.length > 0 && grants[0] == PackageManager.PERMISSION_GRANTED;
+            geoCallback.invoke(geoOrigin, ok, false);
+            geoCallback = null;
+            geoOrigin = null;
+        }
     }
     private void cameraDecision(boolean allowed) {
         if (cameraRequest != null) {

@@ -45,6 +45,9 @@ CREATE TABLE IF NOT EXISTS frames (
     area TEXT NOT NULL,
     note TEXT NOT NULL,
     observed_at TEXT NOT NULL,
+    latitude REAL,
+    longitude REAL,
+    location_accuracy REAL,
     UNIQUE(user_id,request_id)
 );
 CREATE TABLE IF NOT EXISTS sightings (

@@ -108,7 +108,7 @@ function atlas(cats) {
 }
 function entry(s) {
     const badge = s.identity_source === 'automatic' ? '<span class="pill confirmed">已自动归档</span>' : status(s.status);
-    return `<article class="entry">${img('/media/thumb/' + Number(s.id) + '.jpg', '目击照片', 'loading="lazy"')}<div><h3>${s.cat_id ? `<a href="#cat/${Number(s.cat_id)}">${esc(s.cat_name || '已建档的猫')}</a>` : '目击记录 #' + Number(s.id)}</h3><p>${esc(s.area)} · ${esc(date(s.observed_at))}</p>${badge}${s.note ? `<p>${esc(s.note)}</p>` : ''}</div>${s.frame_id ? `<a class="link" href="#encounter/${Number(s.frame_id)}">查看这次相遇</a>` : ''}</article>`;
+    return `<article class="entry">${img('/media/thumb/' + Number(s.id) + '.jpg', '目击照片', 'loading="lazy"')}<div><h3>${s.cat_id ? `<a href="#cat/${Number(s.cat_id)}">${esc(s.cat_name || '已建档的猫')}</a>` : '目击记录 #' + Number(s.id)}</h3><p>${esc(s.area)} · ${esc(date(s.observed_at))}${typeof s.latitude === 'number' && typeof s.longitude === 'number' ? ` · 坐标 ${s.latitude.toFixed(4)}, ${s.longitude.toFixed(4)}` : ''}</p>${badge}${s.note ? `<p>${esc(s.note)}</p>` : ''}</div>${s.frame_id ? `<a class="link" href="#encounter/${Number(s.frame_id)}">查看这次相遇</a>` : ''}</article>`;
 }
 function catPage({ cat, sightings }, allCats = []) {
     const reviewer = session?.role === 'reviewer';

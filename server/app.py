@@ -19,7 +19,7 @@ import accounts
 import providers
 import surveys
 import agent
-from catalog import (SIGHTING_QUERY, audit, catalog, connect, encounter_receipt, field, identify, integer,
+from catalog import (SIGHTING_QUERY, audit, catalog, connect, detect_photo, encounter_receipt, map_sightings, field, identify, integer,
                      known_areas, manage_areas, merge_cats, migrate, one, personal_album, reunions,
                      review_breed, review_identity, revision, serialize, similar_pending, stats,
                      update_cat_profile, upload)
@@ -224,6 +224,15 @@ class App:
             return surveys.board(db, user["id"] if user else None)
         if path == "/api/areas":
             return known_areas(db)
+        if path == "/api/map/config":
+            return {
+                "amap_key": os.getenv("AMAP_JS_KEY", "").strip(),
+                "amap_security_code": os.getenv("AMAP_SECURITY_CODE", "").strip(),
+                "amap_service_host": os.getenv("AMAP_SERVICE_HOST", "").strip(),
+                "center": [123.493886, 41.727829],
+            }
+        if path == "/api/map/sightings":
+            return {"sightings": map_sightings(db, user["id"] if user else None)}
         if path == "/api/home":
             cats = catalog(db)
             return {"stats":stats(db,cats),"cats":list(cats.values())}
@@ -277,13 +286,15 @@ class App:
         if auth_route:
             body = read_json(env,8192)
             return accounts.auth(db,auth_route[1],body,env,self.secure,headers)
-        if path in ("/api/agent/chat", "/api/identify"):
+        if path in ("/api/agent/chat", "/api/identify", "/api/detect"):
             peer = accounts.client_ip(env)
             actor = f"user:{user['id']}" if user else f"guest:{peer}"
             if path == "/api/agent/chat":
                 accounts.throttle(db, f"agent:{actor}", 60, 3600)
                 return agent.chat(db, read_json(env, 9 * 1024 * 1024))
             accounts.throttle(db, f"photo:{actor}", 180, 3600)
+            if path == "/api/detect":
+                return detect_photo(read_json(env, 9 * 1024 * 1024))
             return identify(db, read_json(env, 9 * 1024 * 1024), media_dir=self.media)
         uid = require(user)
         is_photo = path == "/api/sightings"

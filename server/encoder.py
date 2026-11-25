@@ -83,7 +83,14 @@ def _load_one_engine(path):
 
 
 @lru_cache(maxsize=1)
+def _engine():
+    return _load_one_engine(MODEL_PATH)[0]
+
+
+@lru_cache(maxsize=1)
 def _engines():
+    if len(MODEL_PATHS) <= 1:
+        return ((_engine(), 224),)
     return tuple(_load_one_engine(p) for p in MODEL_PATHS)
 
 

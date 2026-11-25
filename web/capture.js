@@ -1,4 +1,5 @@
 import { api, btn, busy, esc, head, icon, img, notice } from './ui.js';
+import { nearestSyluLandmark, reverseGeocodeAmap } from './campus-map.js';
 const maximumSide = 1600;
 const fullBox = [0, 0, 1, 1];
 const canvas = (w, h) => Object.assign(document.createElement('canvas'), { width: w, height: h });
@@ -88,7 +89,7 @@ export function capturePage(main, onSuccess, {saveLocal, draft, lookupOnly = fal
     <p id="mark-help" class="hint" aria-live="polite"></p>
     <div class="capture-stage"><div class="target-stage" id="stage" aria-describedby="mark-help"><img id="preview" alt="本次目击照片" draggable="false"><div class="mark-layer" id="marks"></div></div></div>
     <div class="advice" id="quality" role="status"></div><label class="hint" id="cloud-option" hidden><input name="cloud_photo" type="checkbox"> 允许本次查图将所选画面发送给配置的视觉模型</label><button type="button" class="btn light" id="identify">${icon('search')}照片查查 · 查重与花色识别</button>
-    <p id="lookup-status" role="status" class="hint"></p><div id="results" aria-live="polite"></div><div id="record-fields" ${lookupOnly ? 'hidden inert' : ''}><hr class="divider"><h2>保存这次目击</h2><label class="field"><span>校园区域</span><input name="area" list="capture-areas" required maxlength="60" placeholder="例如，图书馆（琴园环路）或 兵器博物馆 / 兵器广场"><small>优先选择已有区域名称，方便归入同一地点统计。</small></label><datalist id="capture-areas"></datalist>
+    <p id="lookup-status" role="status" class="hint"></p><div id="results" aria-live="polite"></div><div id="record-fields" ${lookupOnly ? 'hidden inert' : ''}><hr class="divider"><h2>保存这次目击</h2><label class="field"><span>校园区域</span><input name="area" list="capture-areas" required maxlength="60" placeholder="例如，图书馆（琴园环路）或 兵器博物馆 / 兵器广场"><small>优先选择已有区域名称，方便归入同一地点统计。</small></label><div class="actions" style="margin:-4px 0 10px"><button type="button" class="btn ghost" id="locate-btn">${icon('pin')}定位当前位置</button><span id="geo-status" class="hint" style="margin:0">拍照或选图时会询问位置权限以关联猫猫出现地点。</span></div><datalist id="capture-areas"></datalist>
     <label class="field"><span>目击时间</span><input type="datetime-local" name="observed" required></label>
     <label class="field"><span>观察备注（选填）</span><textarea name="note" maxlength="800" rows="2" placeholder="例如，左前腿有一处橘色斑纹"></textarea></label><label class="hint"><input type="checkbox" name="automatic" checked> 允许自动关联已建档的猫</label><p class="hint">脸部特征充分吻合时自动记录重遇，其余目击待辨认。</p><p class="form-error" role="alert"></p><button type="submit" class="btn">${icon('book')}提交目击</button></div></form></div>`;
     const $ = selector => main.querySelector(selector), form = $('#capture-form'), stage = $('#stage'), marks = $('#marks'), video = $('#viewfinder');
@@ -100,6 +101,43 @@ export function capturePage(main, onSuccess, {saveLocal, draft, lookupOnly = fal
         if (!draft?.area) form.elements.area.value = prefillArea;
     }
     let stream = null, monitor = null, disposed = false, photo = '', frame = null, boxes = [], suggestions = [], start = null, requestId = newRequestId(), revision = 0, acquire = 0, fileVersion = 0;
+    let gps = null, areaManuallyEdited = false;
+    function requestLocation(force = false) {
+        if (lookupOnly || disposed) return;
+        const geoEl = $('#geo-status');
+        if (!navigator.geolocation) {
+            if (geoEl) geoEl.textContent = '当前浏览器不支持定位，请手动选择校园区域。';
+            return;
+        }
+        if (gps && !force) return;
+        if (geoEl) geoEl.textContent = '正在请求位置权限并定位…';
+        navigator.geolocation.getCurrentPosition(async pos => {
+            if (disposed) return;
+            const lat = Number(pos.coords.latitude.toFixed(6));
+            const lng = Number(pos.coords.longitude.toFixed(6));
+            const acc = Math.round(pos.coords.accuracy || 0);
+            gps = { latitude: lat, longitude: lng, location_accuracy: acc };
+            const amapAddr = await reverseGeocodeAmap(lat, lng).catch(() => null);
+            if (disposed) return;
+            const lm = nearestSyluLandmark(lat, lng);
+            const bestName = amapAddr || lm?.name || '';
+            if (bestName && !areaManuallyEdited && (!form.elements.area.value.trim() || force)) {
+                form.elements.area.value = bestName;
+            }
+            if (geoEl) {
+                geoEl.textContent = amapAddr
+                    ? `高德精确定位：${amapAddr}（精度 ${acc}m）`
+                    : lm
+                        ? `已关联位置：${lm.name}（约 ${lm.distanceMeters}m，精度 ${acc}m）`
+                        : `已记录坐标：${lat.toFixed(4)}, ${lng.toFixed(4)}（精度 ${acc}m），请补充区域名`;
+            }
+        }, err => {
+            if (disposed || !geoEl) return;
+            geoEl.textContent = err?.code === 1
+                ? '未授予位置权限，请手动选择校园区域。'
+                : '定位超时或信号弱，请手动选择校园区域。';
+        }, { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 });
+    }
     let drawing = false, pointerId = null;
     const targets = () => boxes.length ? boxes : [fullBox];
     function stopCamera() {
@@ -142,6 +180,29 @@ export function capturePage(main, onSuccess, {saveLocal, draft, lookupOnly = fal
         setDrawing(false);
         $('#quality').textContent = targets().map((box, i) => `猫 ${i + 1} · ${qualityHints(frame, box).join(' ') || '画面初检通过，可对照脸部和侧身花纹。'}`).join('　');
     }
+    async function autoDetectAndIdentify(version) {
+        const feedback = $('#lookup-status');
+        feedback.textContent = '正在自动检测画面中的猫猫…';
+        try {
+            const det = await api('/detect', { photo });
+            if (disposed || version !== revision) return;
+            if (det?.boxes?.length) {
+                boxes = det.boxes.slice(0, 8);
+                draw();
+                $('#undo').hidden = !boxes.length;
+                $('#mark-toggle').textContent = boxes.length ? '再框一只' : '框选同框猫';
+                $('#mark-help').textContent = `已自动框出 ${boxes.length} 只猫，可直接查重或手动调整。`;
+                $('#quality').textContent = targets().map((box, i) => `猫 ${i + 1} · ${qualityHints(frame, box).join(' ') || '画面初检通过，可对照脸部和侧身花纹。'}`).join('　');
+            }
+        } catch {
+            // Fall back silently to full-frame / manual box
+        }
+        if (!saveLocal && !disposed && version === revision) {
+            await identify();
+        } else if (feedback.textContent.startsWith('正在自动检测')) {
+            feedback.textContent = '';
+        }
+    }
     function useFrame(next) {
         form.elements.cloud_photo.checked = false;
         frame = next;
@@ -152,6 +213,7 @@ export function capturePage(main, onSuccess, {saveLocal, draft, lookupOnly = fal
         form.hidden = false;
         $('#file-error').textContent = '';
         update();
+        requestLocation();
     }
     function refCaption(cat) {
         const pct = typeof cat.similarity === 'number' ? ` · 匹配度约 ${Math.round(cat.similarity * 100)}%` : '';
@@ -240,6 +302,8 @@ export function capturePage(main, onSuccess, {saveLocal, draft, lookupOnly = fal
         }).catch(() => {});
     }
     $('#identify').onclick = identify;
+    $('#locate-btn')?.addEventListener('click', () => requestLocation(true));
+    form.elements.area?.addEventListener('input', () => { areaManuallyEdited = true; });
     const point = e => {
         const r = stage.getBoundingClientRect();
         return [Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)), Math.min(1, Math.max(0, (e.clientY - r.top) / r.height))];
@@ -293,8 +357,9 @@ export function capturePage(main, onSuccess, {saveLocal, draft, lookupOnly = fal
                 image.src = url;
                 await image.decode();
                 if (!disposed && version === fileVersion) {
+                    const curRev = revision + 1;
                     useFrame(bitmapFrame(image, image.naturalWidth, image.naturalHeight));
-                    if (!saveLocal) await identify();
+                    await autoDetectAndIdentify(curRev);
                 }
             }
             catch {
@@ -310,6 +375,7 @@ export function capturePage(main, onSuccess, {saveLocal, draft, lookupOnly = fal
             return;
         }
         const button = e.currentTarget;
+        requestLocation();
         await busy(button, async () => {
             stopCamera();
             const attempt = ++acquire;
@@ -349,9 +415,10 @@ export function capturePage(main, onSuccess, {saveLocal, draft, lookupOnly = fal
             return;
         }
         fileVersion++;
+        const curRev = revision + 1;
         useFrame(bitmapFrame(video, video.videoWidth, video.videoHeight));
         stopCamera();
-        if (!saveLocal) await identify();
+        await autoDetectAndIdentify(curRev);
     };
     form.oninput = e => {
         if (e.target.name)
@@ -370,7 +437,8 @@ export function capturePage(main, onSuccess, {saveLocal, draft, lookupOnly = fal
             const payload = {
                 photo, boxes: targets(), area: form.elements.area.value.trim(), note: form.elements.note.value.trim(), request_id: requestId, observed_at: observed.toISOString(),
                 suggested_cat_ids: targets().map((_, i) => suggestions[i] ?? null),
-                automatic: form.elements.automatic.checked
+                automatic: form.elements.automatic.checked,
+                ...(gps ? { latitude: gps.latitude, longitude: gps.longitude, location_accuracy: gps.location_accuracy } : {})
             };
             const result = saveLocal ? await saveLocal(payload) : await api('/sightings', payload);
             if (!disposed)

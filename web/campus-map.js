@@ -1,4 +1,4 @@
-import { back, card, esc, head, icon } from './ui.js';
+import { api, back, card, date, esc, head, icon } from './ui.js';
 
 /**
  * 沈阳理工大学（浑南校区 · 南屏中路6号）内置校园猫交互地图
@@ -8,6 +8,7 @@ import { back, card, esc, head, icon } from './ui.js';
 export const SYLU_LANDMARKS = [
     {
         id: 'north-gate',
+        lat: 41.7306, lng: 123.4936,
         name: '北门（汇泉东路）',
         short: '北门',
         x: 340, y: 66,
@@ -16,6 +17,7 @@ export const SYLU_LANDMARKS = [
     },
     {
         id: 'dorm',
+        lat: 41.7295, lng: 123.4962,
         name: '学生生活区（宿舍）',
         short: '生活区宿舍',
         x: 520, y: 148,
@@ -24,6 +26,7 @@ export const SYLU_LANDMARKS = [
     },
     {
         id: 'canteen',
+        lat: 41.7282, lng: 123.4963,
         name: '餐饮服务中心（食堂）',
         short: '食堂 / 餐饮中心',
         x: 525, y: 266,
@@ -32,6 +35,7 @@ export const SYLU_LANDMARKS = [
     },
     {
         id: 'stadium',
+        lat: 41.7279, lng: 123.4910,
         name: '体育场 / 操场',
         short: '体育场',
         x: 152, y: 152,
@@ -40,6 +44,7 @@ export const SYLU_LANDMARKS = [
     },
     {
         id: 'armory',
+        lat: 41.726883, lng: 123.491791,
         name: '兵器博物馆 / 兵器广场',
         short: '兵器博物馆',
         x: 175, y: 312,
@@ -48,6 +53,7 @@ export const SYLU_LANDMARKS = [
     },
     {
         id: 'library',
+        lat: 41.727829, lng: 123.493886,
         name: '图书馆（琴园环路）',
         short: '图书馆',
         x: 342, y: 214,
@@ -56,6 +62,7 @@ export const SYLU_LANDMARKS = [
     },
     {
         id: 'zhixue',
+        lat: 41.7272, lng: 123.4956,
         name: '志学堂',
         short: '志学堂',
         x: 342, y: 320,
@@ -64,6 +71,7 @@ export const SYLU_LANDMARKS = [
     },
     {
         id: 'teaching',
+        lat: 41.7264, lng: 123.4940,
         name: '教学楼区',
         short: '教学楼区',
         x: 256, y: 404,
@@ -72,6 +80,7 @@ export const SYLU_LANDMARKS = [
     },
     {
         id: 'qinyuan',
+        lat: 41.7266, lng: 123.4926,
         name: '琴园绿地',
         short: '琴园绿地',
         x: 440, y: 382,
@@ -80,6 +89,7 @@ export const SYLU_LANDMARKS = [
     },
     {
         id: 'south-gate',
+        lat: 41.7248, lng: 123.4939,
         name: '南门（南屏中路）',
         short: '南门正门',
         x: 342, y: 468,
@@ -100,7 +110,7 @@ function matchLandmark(areaText) {
     return null;
 }
 
-export function campusMapPage(main, cats, onPickArea) {
+function renderOfflineSvgMap(main, cats, onPickArea, onSwitchLive = null) {
     const byId = Object.fromEntries(SYLU_LANDMARKS.map(lm => [lm.id, []]));
     const others = [];
     for (const cat of cats) {
@@ -196,4 +206,235 @@ export function campusMapPage(main, cats, onPickArea) {
         };
     });
     select(initialId);
+    if (onSwitchLive) {
+        const bar = document.createElement('div');
+        bar.className = 'actions';
+        bar.style.marginBottom = '10px';
+        bar.innerHTML = `<button type="button" class="btn light" id="switch-amap">${icon('pin')}切换回高德真实地图</button>`;
+        const wrap = main.querySelector('.campus-map-wrap');
+        if (wrap) wrap.parentNode.insertBefore(bar, wrap);
+        bar.querySelector('#switch-amap').onclick = onSwitchLive;
+    }
+}
+
+
+export function nearestSyluLandmark(lat, lng) {
+    if (typeof lat !== 'number' || typeof lng !== 'number' || !Number.isFinite(lat) || !Number.isFinite(lng))
+        return null;
+    const toRad = d => d * Math.PI / 180;
+    let best = null, bestDist = Infinity;
+    for (const lm of SYLU_LANDMARKS) {
+        if (typeof lm.lat !== 'number' || typeof lm.lng !== 'number') continue;
+        const dLat = toRad(lm.lat - lat), dLng = toRad(lm.lng - lng);
+        const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat)) * Math.cos(toRad(lm.lat)) * Math.sin(dLng / 2) ** 2;
+        const dist = 6371000 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        if (dist < bestDist) { bestDist = dist; best = lm; }
+    }
+    return best && bestDist <= 1800 ? { name: best.name, short: best.short, distanceMeters: Math.round(bestDist) } : null;
+}
+
+
+/* --- WGS-84 to GCJ-02 (China Mars Coordinate) conversion for accurate Amap pins --- */
+export function wgs84ToGcj02(lat, lng) {
+    const PI = Math.PI, a = 6378245.0, ee = 0.00669342162296594323;
+    if (lng < 72.004 || lng > 137.8347 || lat < 0.8293 || lat > 55.8271) return [lng, lat];
+    const transformLat = (x, y) => {
+        let r = -100 + 2 * x + 3 * y + 0.2 * y * y + 0.1 * x * y + 0.2 * Math.sqrt(Math.abs(x));
+        r += (20 * Math.sin(6 * x * PI) + 20 * Math.sin(2 * x * PI)) * 2 / 3;
+        r += (20 * Math.sin(y * PI) + 40 * Math.sin(y / 3 * PI)) * 2 / 3;
+        r += (160 * Math.sin(y / 12 * PI) + 320 * Math.sin(y * PI / 30)) * 2 / 3;
+        return r;
+    };
+    const transformLng = (x, y) => {
+        let r = 300 + x + 2 * y + 0.1 * x * x + 0.1 * x * y + 0.1 * Math.sqrt(Math.abs(x));
+        r += (20 * Math.sin(6 * x * PI) + 20 * Math.sin(2 * x * PI)) * 2 / 3;
+        r += (20 * Math.sin(x * PI) + 40 * Math.sin(x / 3 * PI)) * 2 / 3;
+        r += (150 * Math.sin(x / 12 * PI) + 300 * Math.sin(x / 30 * PI)) * 2 / 3;
+        return r;
+    };
+    let dLat = transformLat(lng - 105.0, lat - 35.0);
+    let dLng = transformLng(lng - 105.0, lat - 35.0);
+    const radLat = lat / 180.0 * PI;
+    let magic = Math.sin(radLat);
+    magic = 1 - ee * magic * magic;
+    const sqrtMagic = Math.sqrt(magic);
+    dLat = (dLat * 180.0) / ((a * (1 - ee)) / (magic * sqrtMagic) * PI);
+    dLng = (dLng * 180.0) / (a / sqrtMagic * Math.cos(radLat) * PI);
+    return [Number((lng + dLng).toFixed(6)), Number((lat + dLat).toFixed(6))];
+}
+
+let _amapPromise = null;
+async function loadAmap() {
+    if (window.AMap) return window.AMap;
+    if (_amapPromise) return _amapPromise;
+    _amapPromise = (async () => {
+        const cfg = await api('/map/config').catch(() => null);
+        if (!cfg || !cfg.amap_key) return null;
+        if (cfg.amap_service_host) {
+            window._AMapSecurityConfig = { serviceHost: cfg.amap_service_host };
+        } else if (cfg.amap_security_code) {
+            window._AMapSecurityConfig = { securityJsCode: cfg.amap_security_code };
+        }
+        await new Promise((resolve, reject) => {
+            const s = document.createElement('script');
+            s.src = `https://webapi.amap.com/maps?v=2.0&key=${encodeURIComponent(cfg.amap_key)}&plugin=AMap.Geocoder,AMap.Scale`;
+            s.async = true;
+            s.onload = resolve;
+            s.onerror = reject;
+            document.head.appendChild(s);
+        });
+        return window.AMap || null;
+    })().catch(() => {
+        _amapPromise = null;
+        return null;
+    });
+    return _amapPromise;
+}
+
+export async function reverseGeocodeAmap(lat, lng) {
+    const AMap = await loadAmap();
+    if (!AMap || !AMap.Geocoder) return null;
+    const [gLng, gLat] = wgs84ToGcj02(lat, lng);
+    return new Promise(resolve => {
+        try {
+            const geocoder = new AMap.Geocoder({ radius: 120, extensions: 'all' });
+            geocoder.getAddress([gLng, gLat], (status, result) => {
+                if (status === 'complete' && result?.regeocode) {
+                    const rg = result.regeocode;
+                    const poi = rg.pois?.[0]?.name;
+                    const aois = rg.aois?.[0]?.name;
+                    const addr = rg.formattedAddress || '';
+                    const shortName = poi ? (aois && !poi.includes(aois) ? `${aois} · ${poi}` : poi) : addr.replace(/^辽宁省沈阳市浑南区/, '');
+                    resolve(shortName ? shortName.slice(0, 56) : null);
+                } else {
+                    resolve(null);
+                }
+            });
+        } catch {
+            resolve(null);
+        }
+    });
+}
+
+export async function campusMapPage(main, cats, onPickArea) {
+    const [AMap, geoData] = await Promise.all([
+        loadAmap(),
+        api('/map/sightings').catch(() => ({ sightings: [] })),
+    ]);
+    if (!AMap) {
+        renderOfflineSvgMap(main, cats, onPickArea);
+        return;
+    }
+
+    const sightings = geoData?.sightings || [];
+    const uniqueCats = [...new Map(sightings.filter(s => s.cat_id).map(s => [s.cat_id, s.cat_name || `猫 #${s.cat_id}`])).entries()];
+
+    main.innerHTML = back('#home', '返回首页')
+        + head('沈理猫地图（高德实景）', '基于高德地图精确落点展示猫咪出现位置与时间轨迹。')
+        + `<section class="surface" style="padding:14px">
+            <div class="actions" style="flex-wrap:wrap;gap:8px;margin-bottom:10px">
+              <button type="button" class="btn light" id="amap-layer-toggle">切换卫星图</button>
+              <button type="button" class="btn light" id="amap-locate">${icon('pin')}定位到我</button>
+              <select id="amap-cat-filter" aria-label="按猫查看时空轨迹" style="max-width:190px">
+                <option value="">全部精确目击（${sightings.length} 条）</option>
+                ${uniqueCats.map(([id, name]) => `<option value="${id}">${esc(name)} · 时空轨迹</option>`).join('')}
+              </select>
+              <button type="button" class="btn ghost" id="amap-offline">离线示意图</button>
+            </div>
+            <div id="amap-container" style="width:100%;height:440px;border-radius:12px;overflow:hidden;border:1px solid var(--border)"></div>
+            <p class="hint" id="amap-hint" style="margin-top:8px">${sightings.length ? `已加载 ${sightings.length} 条带精确 GPS 的目击记录，点击橘色图钉查看照片与时间。` : '当前暂无带精确 GPS 的目击记录，拍照授权定位后将自动精确落点在此地图上。'}</p>
+          </section>
+          <section class="surface" id="amap-detail" style="margin-top:12px">
+            <div class="map-panel-head">
+              <div><h2>沈阳理工大学（浑南校区）</h2><p class="hint">可点击地图任意图钉查看对应猫咪，或直接在这里记录新目击。</p></div>
+              <button type="button" class="btn" id="amap-record-now">${icon('camera')}拍照记录目击</button>
+            </div>
+          </section>`;
+
+    const map = new AMap.Map('amap-container', {
+        zoom: 16.2,
+        center: [123.493886, 41.727829],
+        viewMode: '2D',
+    });
+    if (AMap.Scale) map.addControl(new AMap.Scale());
+
+    const satLayer = new AMap.TileLayer.Satellite();
+    const roadNet = new AMap.TileLayer.RoadNet();
+    let isSat = false;
+    main.querySelector('#amap-layer-toggle').onclick = e => {
+        isSat = !isSat;
+        if (isSat) { map.add([satLayer, roadNet]); e.target.textContent = '切换标准图'; }
+        else { map.remove([satLayer, roadNet]); e.target.textContent = '切换卫星图'; }
+    };
+    main.querySelector('#amap-offline').onclick = () => {
+        map.destroy();
+        renderOfflineSvgMap(main, cats, onPickArea, () => campusMapPage(main, cats, onPickArea));
+    };
+    main.querySelector('#amap-record-now').onclick = () => onPickArea('');
+
+    const infoWindow = new AMap.InfoWindow({ offset: new AMap.Pixel(0, -28) });
+    let overlays = [];
+
+    function renderPins(filterCatId = '') {
+        if (overlays.length) { map.remove(overlays); overlays = []; }
+        const list = filterCatId ? sightings.filter(s => String(s.cat_id) === String(filterCatId)) : sightings;
+        const path = [];
+        // Chronological order for trajectory polyline
+        const ordered = [...list].reverse();
+        ordered.forEach((s, idx) => {
+            const [gLng, gLat] = wgs84ToGcj02(Number(s.latitude), Number(s.longitude));
+            path.push([gLng, gLat]);
+            const label = filterCatId ? String(idx + 1) : '🐾';
+            const marker = new AMap.Marker({
+                position: [gLng, gLat],
+                title: s.cat_name || s.area || '校园猫目击',
+                content: `<div style="background:#d9822b;color:#fff;border:2px solid #fff;border-radius:999px;min-width:26px;height:26px;padding:0 6px;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;box-shadow:0 2px 6px rgba(0,0,0,.28)">${label}</div>`,
+                offset: new AMap.Pixel(-13, -13),
+            });
+            marker.on('click', () => {
+                const title = s.cat_name ? esc(s.cat_name) : `待辨认目击 #${s.id}`;
+                const link = s.cat_id ? `<a href="#cat/${Number(s.cat_id)}" style="color:#1c4d3e;font-weight:600">查看档案 →</a>` : '<span style="color:#666">待审核建档</span>';
+                const accTxt = s.location_accuracy ? ` · 精度约 ${Math.round(s.location_accuracy)}m` : '';
+                infoWindow.setContent(
+                    `<div style="min-width:190px;font-size:13px;line-height:1.5">`
+                    + `<img src="${esc(s.thumbnail_url)}" alt="${title}" style="width:100%;height:110px;object-fit:cover;border-radius:8px;margin-bottom:6px">`
+                    + `<div><strong>${title}</strong>${s.coat ? ` · ${esc(s.coat)}` : ''}</div>`
+                    + `<div style="color:#555">${esc(s.area || '沈理校内')}${accTxt}</div>`
+                    + `<div style="color:#777;font-size:12px">${esc(date(s.observed_at))}</div>`
+                    + `<div style="margin-top:6px">${link}</div></div>`
+                );
+                infoWindow.open(map, [gLng, gLat]);
+            });
+            overlays.push(marker);
+        });
+        if (filterCatId && path.length >= 2) {
+            const line = new AMap.Polyline({
+                path,
+                strokeColor: '#d9822b',
+                strokeWeight: 4,
+                strokeStyle: 'dashed',
+                showDir: true,
+            });
+            overlays.push(line);
+        }
+        if (overlays.length) {
+            map.add(overlays);
+            if (path.length === 1) map.setZoomAndCenter(17.2, path[0]);
+            else map.setFitView(overlays, false, [48, 48, 48, 48]);
+        }
+    }
+
+    renderPins('');
+    main.querySelector('#amap-cat-filter').onchange = e => renderPins(e.target.value);
+    main.querySelector('#amap-locate').onclick = () => {
+        if (!navigator.geolocation) return;
+        navigator.geolocation.getCurrentPosition(pos => {
+            const [gLng, gLat] = wgs84ToGcj02(pos.coords.latitude, pos.coords.longitude);
+            map.setZoomAndCenter(17.5, [gLng, gLat]);
+            const meMarker = new AMap.CircleMarker({
+                center: [gLng, gLat], radius: 8, strokeColor: '#fff', strokeWeight: 2, fillColor: '#2563eb', fillOpacity: 0.9,
+            });
+            map.add(meMarker);
+        }, () => {}, { enableHighAccuracy: true, timeout: 8000 });
+    };
 }

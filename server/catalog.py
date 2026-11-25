@@ -9,6 +9,7 @@ from collections import Counter, OrderedDict, defaultdict
 from datetime import datetime, timedelta, timezone
 
 import ai_vision
+import detector
 import face_match
 from face_match import automatic_match
 from media import Problem, canonical_photo, prepare, save_media, validate_boxes
@@ -53,6 +54,14 @@ def migrate(db):
     for col, spec in migrations:
         if col not in existing:
             db.execute(f"ALTER TABLE cats ADD COLUMN {col} {spec}")
+    existing_frames = {row["name"] for row in db.execute("PRAGMA table_info(frames)")}
+    for col, spec in (
+        ("latitude", "REAL"),
+        ("longitude", "REAL"),
+        ("location_accuracy", "REAL"),
+    ):
+        if col not in existing_frames:
+            db.execute(f"ALTER TABLE frames ADD COLUMN {col} {spec}")
 
 
 def choice_field(body, key, allowed, default):
@@ -135,7 +144,7 @@ SIGHTING_QUERY = """
  SELECT s.id,s.box,s.analysis,s.status,s.cat_id,s.suggested_cat_id,c.name AS cat_name,
         CASE WHEN a.sighting_id IS NOT NULL THEN 'automatic'
              WHEN s.status='confirmed' THEN 'reviewed' END AS identity_source,
-        f.id AS frame_id,f.observed_at,f.area,f.note
+        f.id AS frame_id,f.observed_at,f.area,f.note,f.latitude,f.longitude,f.location_accuracy
  FROM sightings s JOIN frames f ON f.id=s.frame_id LEFT JOIN cats c ON c.id=s.cat_id
  LEFT JOIN auto_identity a ON a.sighting_id=s.id
 """
@@ -228,6 +237,17 @@ def _load_candidate_crops(candidates, refs, media_dir):
     return items
 
 
+
+
+def detect_photo(body):
+    _, image = canonical_photo(body.get("photo"))
+    detections = detector.detect_cats(image)
+    return {
+        "detector_enabled": detector.is_enabled(),
+        "detections": detections,
+        "boxes": [d["box"] for d in detections],
+    }
+
 def identify(db, body, media_dir=None):
     boxes = validate_boxes(body.get("boxes"))
     area = area_field(body, "area", 80) if body.get("area") is not None else ""
@@ -317,6 +337,24 @@ def upload(db, media_dir, uid, body):
         raise Problem("提交编号无效，请重试。")
     area = area_field(body, "area", 80, required=True)
     note = field(body, "note", 800)
+    lat = body.get("latitude")
+    lng = body.get("longitude")
+    acc = body.get("location_accuracy")
+    if lat is not None or lng is not None:
+        try:
+            lat = float(lat)
+            lng = float(lng)
+        except (TypeError, ValueError):
+            raise Problem("定位坐标格式无效。")
+        if not (-90.0 <= lat <= 90.0 and -180.0 <= lng <= 180.0):
+            raise Problem("定位坐标超出有效范围。")
+        if acc is not None:
+            try:
+                acc = max(0.0, min(10000.0, float(acc)))
+            except (TypeError, ValueError):
+                acc = None
+    else:
+        acc = None
     boxes = validate_boxes(body.get("boxes"))
     suggestions = body.get("suggested_cat_ids", [None]*len(boxes))
     if not isinstance(suggestions,list) or len(suggestions)!=len(boxes):
@@ -381,8 +419,8 @@ def upload(db, media_dir, uid, body):
                     if db.execute("SELECT 1 FROM frames WHERE image=?", (filename,)).fetchone():
                         raise Problem("这张相同的照片已提交过，请使用本次目击的新照片。", 409)
                     frame_id = db.execute("""
-                        INSERT INTO frames(user_id,request_id,request_hash,image,area,note,observed_at)
-                        VALUES(?,?,?,?,?,?,?)""", (uid, key, fingerprint, filename, area, note, observed or iso())).lastrowid
+                        INSERT INTO frames(user_id,request_id,request_hash,image,area,note,observed_at,latitude,longitude,location_accuracy)
+                        VALUES(?,?,?,?,?,?,?,?,?,?)""", (uid, key, fingerprint, filename, area, note, observed or iso(), lat, lng, acc)).lastrowid
                     current_refs = set()
                     if proposed and ref_revision == revision(db):
                         current_refs = {ref["_reference_id"] for _, ref in references(db)}
@@ -706,3 +744,40 @@ def reunions(db, uid):
                           "first_photo_url":f"/media/crop/{first['id']}.jpg",
                           "last_photo_url":f"/media/crop/{last['id']}.jpg"})
     return sorted(cards, key=lambda v: v["last_at"], reverse=True)
+
+
+def map_sightings(db, uid=None):
+    """Return confirmed sightings (plus caller's own pending sightings) that carry exact GPS coordinates."""
+    if uid is not None:
+        rows = db.execute(
+            """SELECT s.id, s.cat_id, s.status, c.name AS cat_name, c.coat,
+                      f.area, f.note, f.observed_at, f.latitude, f.longitude, f.location_accuracy
+               FROM sightings s
+               JOIN frames f ON f.id=s.frame_id
+               LEFT JOIN cats c ON c.id=s.cat_id
+               WHERE f.latitude IS NOT NULL AND f.longitude IS NOT NULL
+                 AND (s.status='confirmed' OR (s.status='pending' AND f.user_id=?))
+               ORDER BY f.observed_at DESC, s.id DESC
+               LIMIT 300""",
+            (uid,),
+        ).fetchall()
+    else:
+        rows = db.execute(
+            """SELECT s.id, s.cat_id, s.status, c.name AS cat_name, c.coat,
+                      f.area, f.note, f.observed_at, f.latitude, f.longitude, f.location_accuracy
+               FROM sightings s
+               JOIN frames f ON f.id=s.frame_id
+               LEFT JOIN cats c ON c.id=s.cat_id
+               WHERE f.latitude IS NOT NULL AND f.longitude IS NOT NULL
+                 AND s.status='confirmed'
+               ORDER BY f.observed_at DESC, s.id DESC
+               LIMIT 300"""
+        ).fetchall()
+    return [
+        dict(
+            dict(r),
+            photo_url=f"/media/crop/{r['id']}.jpg",
+            thumbnail_url=f"/media/thumb/{r['id']}.jpg",
+        )
+        for r in rows
+    ]
