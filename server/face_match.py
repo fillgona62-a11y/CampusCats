@@ -28,22 +28,31 @@ _body_size = 256
 def _ensure_detectors():
     if not hasattr(_thread, "detector"):
         cv2.setNumThreads(1)
-        _thread.detector = cv2.CascadeClassifier(str(_cascade))
+        _thread.detector = cv2.CascadeClassifier(str(_cascade)) if hasattr(cv2, "CascadeClassifier") else None
         _thread.sift = cv2.SIFT_create(nfeatures=450, contrastThreshold=0.020)
         _thread.clahe = cv2.createCLAHE(clipLimit=2.2, tileGridSize=(8, 8))
 
 
 def _detect_single_face(gray_img):
-    """Try upright first, then slight +-12 degree tilts for head-tilted campus cats."""
+    """Try upright first, then slight +-12 degree tilts for head-tilted campus cats (compatible with OpenCV 4 & 5)."""
+    from cat_face import detect_face_box
+
     for angle in (0, -12, 12):
         candidate = gray_img if angle == 0 else gray_img.rotate(angle, resample=Image.Resampling.BICUBIC, expand=False)
-        boxes = _thread.detector.detectMultiScale(
-            np.asarray(candidate), scaleFactor=1.10, minNeighbors=3, minSize=(50, 50),
-        )
-        if len(boxes) == 1:
-            x, y, w, h = map(int, boxes[0])
-            if w >= candidate.width * 0.25 and h >= candidate.height * 0.25:
-                return candidate.crop((x, y, x + w, y + h))
+        if _thread.detector is not None:
+            boxes = _thread.detector.detectMultiScale(
+                np.asarray(candidate), scaleFactor=1.10, minNeighbors=3, minSize=(50, 50),
+            )
+            if len(boxes) == 1:
+                x, y, w, h = map(int, boxes[0])
+                if w >= candidate.width * 0.25 and h >= candidate.height * 0.25:
+                    return candidate.crop((x, y, x + w, y + h))
+        else:
+            box = detect_face_box(candidate)
+            if box is not None:
+                x, y, w, h = box
+                if w >= candidate.width * 0.25 and h >= candidate.height * 0.25:
+                    return candidate.crop((x, y, x + w, y + h))
     return None
 
 
@@ -166,12 +175,15 @@ def rerank_with_local_features(query_crop, candidates, references, media_dir):
         item = dict(cand)
         ref = ref_by_id.get(item.get("reference_id"))
         best_inliers = 0
+        both_clear_faces = False
         if ref and ref.get("frame") and ref.get("box"):
             ref_path = Path(media_dir) / ref["frame"]
             if ref_path.is_file():
                 try:
                     if q_face is not None:
                         r_face = reference_features(ref_path, tuple(ref["box"]))
+                        if r_face is not None and len(q_face[0]) >= 32 and len(r_face[0]) >= 32:
+                            both_clear_faces = True
                         best_inliers = max(best_inliers, int(round(correspondence_score(q_face, r_face) * 1.4)))
                     if q_body is not None:
                         r_body = reference_body_features(ref_path, tuple(ref["box"]))
@@ -183,6 +195,10 @@ def rerank_with_local_features(query_crop, candidates, references, media_dir):
             boost = min(0.22, (best_inliers - 10) * 0.008)
             item["similarity"] = round(min(0.99, float(item.get("similarity", 0.0)) + boost), 4)
             item["distance"] = round(max(0.0, float(item.get("distance", 0.3)) - boost * 0.45), 5)
+        elif both_clear_faces and best_inliers == 0:
+            # Both crops have clear frontal cat faces but zero consistent facial landmarks -> penalize lookalike
+            item["distance"] = round(min(1.0, float(item.get("distance", 0.3)) + 0.035), 5)
+            item["similarity"] = round(max(0.0, float(item.get("similarity", 0.0)) - 0.07), 4)
         updated.append(item)
 
     updated.sort(key=lambda c: (-float(c.get("similarity", 0.0)), float(c.get("distance", 1.0))))

@@ -31,6 +31,29 @@ function resizeToDataUrl(file, maxSide = 1280) {
     });
 }
 
+export function formatAgentHtml(raw) {
+    const safe = esc(String(raw || ''));
+    const inline = s => s
+        .replace(/`([^`\n]+)`/g, '<code>$1</code>')
+        .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+    const lines = safe.split(/\r?\n/);
+    const out = [];
+    let inList = false;
+    for (const line of lines) {
+        const trimmed = line.trim();
+        const bullet = trimmed.match(/^(?:[•\-*]|\d+\.)\s+(.*)$/);
+        if (bullet) {
+            if (!inList) { out.push('<ul>'); inList = true; }
+            out.push(`<li>${inline(bullet[1])}</li>`);
+        } else {
+            if (inList) { out.push('</ul>'); inList = false; }
+            if (trimmed) out.push(`<p>${inline(trimmed)}</p>`);
+        }
+    }
+    if (inList) out.push('</ul>');
+    return out.join('') || '<p></p>';
+}
+
 export function initAgentWidget() {
     if (document.getElementById('agent-root'))
         return () => {};
@@ -44,7 +67,7 @@ export function initAgentWidget() {
           <button type="button" id="agent-close" class="agent-close" aria-label="关闭">×</button>
         </header>
         <div id="agent-log" class="agent-log" aria-live="polite">
-          <div class="agent-msg bot">你好！可以发一张猫照片问我「库里记录过吗？是什么品种？」，或直接搜校园里见过的猫。</div>
+          <div class="agent-msg bot"><div class="agent-text"><p>你好！可以发一张猫照片问我「库里记录过吗？是什么品种？」（支持同框多只小猫），或直接搜校园里见过的猫。</p></div></div>
         </div>
         <div class="agent-quick">
           <button type="button" data-q="全校现在记录了几只猫？">全校统计</button>
@@ -53,10 +76,10 @@ export function initAgentWidget() {
         </div>
         <div id="agent-photo-bar" class="agent-photo-bar" hidden>
           <img id="agent-thumb" alt="待识别照片">
-          <span>已附带照片（将自动查重并识别品种）</span>
+          <span>已附带照片（自动框选多猫 · 查重并识别品种）</span>
           <button type="button" id="agent-photo-clear">移除</button>
         </div>
-        <label id="agent-cloud-label" class="hint" hidden><input type="checkbox" id="agent-cloud"> 允许将本次照片发送给配置的视觉模型</label>
+        <label id="agent-cloud-label" class="hint" hidden><input type="checkbox" id="agent-cloud"> 使用已配置的云端视觉大模型增强品种与细节复核</label>
         <form id="agent-form" class="agent-form">
           <input id="agent-file" type="file" accept="image/*" hidden>
           <button type="button" id="agent-pick" class="btn light" title="附带猫照片">传图</button>
@@ -78,15 +101,18 @@ export function initAgentWidget() {
     const thumb = root.querySelector('#agent-thumb');
 
     let pendingPhoto = '';
+    let hasCloudVision = false;
     const history = [];
     const initial = log.innerHTML;
     let generation = 0;
     const cloud = root.querySelector('#agent-cloud');
+    const cloudLabel = root.querySelector('#agent-cloud-label');
 
     function appendMsg(role, text, extraHtml = '') {
         const div = document.createElement('div');
         div.className = `agent-msg ${role}`;
-        div.innerHTML = `<div class="agent-text">${esc(text).replace(/\n/g, '<br>')}</div>${extraHtml}`;
+        const html = role === 'bot' ? formatAgentHtml(text) : `<p>${esc(text).replace(/\n/g, '<br>')}</p>`;
+        div.innerHTML = `<div class="agent-text">${html}</div>${extraHtml}`;
         log.appendChild(div);
         log.scrollTop = log.scrollHeight;
         return div;
@@ -102,11 +128,12 @@ export function initAgentWidget() {
     async function loadStatus() {
         try {
             const st = await api('/agent/status');
-            root.querySelector('#agent-cloud-label').hidden = st.vision_mode !== 'vlm';
+            hasCloudVision = st.vision_mode === 'vlm';
+            cloudLabel.hidden = !hasCloudVision;
             if (st.mode === 'llm') {
-                modeEl.textContent = st.scope === 'personal' ? '我的专属助手 · 在线' : '校园图鉴助手 · 在线';
+                modeEl.textContent = st.scope === 'personal' ? '我的专属助手 · 在线' : '校园图鉴智能助手 · 在线';
             } else {
-                modeEl.textContent = '校园图鉴查询';
+                modeEl.textContent = st.clip_enabled ? '校园图鉴 · 本地识图在线' : '校园图鉴查询';
             }
         } catch {
             modeEl.textContent = '暂时连不上服务器';
@@ -155,6 +182,7 @@ export function initAgentWidget() {
             pendingPhoto = ready;
             thumb.src = pendingPhoto;
             photoBar.hidden = false;
+            if (hasCloudVision) cloud.checked = true;
         } catch (err) {
             appendMsg('bot', err.message || '图片读取失败，请重试。');
         }

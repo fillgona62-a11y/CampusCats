@@ -106,7 +106,11 @@ def effective(db, uid, folder):
     except (InvalidToken, Problem):
         # Gracefully fall back to local mode instead of breaking /api/identify with 503.
         return None
-    return dict(public(row), api_key=key, enabled=True, timeout=25, scope="personal" if row["owner"] else "shared")
+    pub = public(row)
+    # Auto-heal common DeepSeek model name typo ("deepseek-flash" -> "deepseek-chat")
+    if "api.deepseek.com" in pub["base_url"] and pub["chat_model"].strip().lower() == "deepseek-flash":
+        pub["chat_model"] = "deepseek-chat"
+    return dict(pub, api_key=key, enabled=True, timeout=25, scope="personal" if row["owner"] else "shared")
 
 
 def configure(db, owner, body, folder):
@@ -155,7 +159,6 @@ def configure(db, owner, body, folder):
             tiny_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
             v_payload = {
                 "model": vision,
-                "max_tokens": 32,
                 "messages": [{
                     "role": "user",
                     "content": [

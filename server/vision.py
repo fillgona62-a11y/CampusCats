@@ -21,8 +21,8 @@ except ImportError:
     np = None
 
 MODEL_VERSION = encoder.VERSION or "coat-texture-2"
-# Provisional distance for showing suggestions. Validate on local photographs.
-DEFAULT_MAX_DISTANCE = float(os.getenv("CAMPUSCATS_DISTANCE", "0.45" if encoder.VERSION else "0.34"))
+# Calibrated distance ceiling to suppress false-positive cross-cat matches while preserving cross-day recall.
+DEFAULT_MAX_DISTANCE = float(os.getenv("CAMPUSCATS_DISTANCE", "0.28" if encoder.VERSION else "0.32"))
 if not math.isfinite(DEFAULT_MAX_DISTANCE) or not 0 <= DEFAULT_MAX_DISTANCE <= 1:
     raise ValueError("CAMPUSCATS_DISTANCE 取值范围为 0 至 1。")
 
@@ -192,11 +192,13 @@ def analyze_crop(image, box):
 
 
 def distance_to_similarity(distance, max_distance=DEFAULT_MAX_DISTANCE):
-    """Convert raw descriptor distance to a user-friendly 0..1 similarity score."""
+    """Convert raw descriptor distance to an honest, calibrated 0..1 similarity score."""
     if distance is None or not math.isfinite(distance):
         return 0.0
     if encoder.VERSION:
-        return round(max(0.0, min(1.0, 1.0 - distance)), 4)
+        # Calibrate ONNX spatial cosine distance so borderline matches (~0.24-0.28) show ~45%-55% instead of 76%
+        ceiling = max(max_distance * 1.55, 0.42)
+        return round(max(0.0, min(1.0, 1.0 - distance / ceiling)), 4)
     ceiling = max(max_distance * 1.45, 0.48)
     return round(max(0.0, min(1.0, 1.0 - distance / ceiling)), 4)
 
@@ -290,8 +292,18 @@ def rank_candidates(query, references, limit=3, max_distance=DEFAULT_MAX_DISTANC
     return result
 
 
-def assess_db_match(candidates, reference_count, area="", *, usable=True, vlm_compare=None):
-    """Describe candidate evidence; combines local retrieval, SIFT local landmarks, and optional VLM verdict."""
+def assess_db_match(
+    candidates,
+    reference_count,
+    area="",
+    *,
+    usable=True,
+    vlm_compare=None,
+    not_cat=False,
+    not_cat_reason="",
+    max_distance=DEFAULT_MAX_DISTANCE,
+):
+    """Describe candidate evidence; combines local retrieval, SIFT local landmarks, anti-human gate, and optional VLM verdict."""
     nearest = candidates[0] if candidates else {}
     result = {
         "recorded": None,
@@ -299,12 +311,21 @@ def assess_db_match(candidates, reference_count, area="", *, usable=True, vlm_co
         "top_cat_name": nearest.get("name", ""),
         "area_matched": bool(area and area.strip() == nearest.get("area")),
     }
+    if not_cat:
+        return dict(
+            result,
+            top_cat_id=None,
+            top_cat_name="",
+            area_matched=False,
+            status="not_a_cat",
+            summary=not_cat_reason or "画面识别为人像或非猫咪目标，已拦截花色与图鉴比对。",
+        )
     if not usable:
         return dict(result, status="poor_quality", summary="照片的辨认特征不足，请补拍清晰的脸部或侧身。")
     if not reference_count:
         return dict(result, status="no_reference", summary="图鉴尚无可用于比对的参考照。")
     if not nearest:
-        return dict(result, status="no_candidate", summary="目前没有找到外观接近的参考照，可提交目击后继续辨认。")
+        return dict(result, status="no_candidate", summary="目前没有找到外观足够接近的参考照，可能是尚未建档的新猫。")
 
     # If VLM pairwise verification gave a clear verdict, surface it concisely
     if isinstance(vlm_compare, dict) and vlm_compare.get("source") == "vlm":
@@ -323,13 +344,22 @@ def assess_db_match(candidates, reference_count, area="", *, usable=True, vlm_co
                 summary=f"视觉复核认为与候选猫存在差异：{reason}" if reason else "视觉复核认为可能不是库内候选猫，建议提交目击建档。",
             )
 
-    if len(candidates) > 1 and candidates[1]["distance"] - nearest["distance"] < 0.03:
+    if len(candidates) > 1 and candidates[1]["distance"] - nearest["distance"] < 0.025:
         return dict(result, status="ambiguous", summary="有多只外观接近的候选，请对照脸部、四肢和尾巴的花纹。")
     if nearest.get("local_inliers", 0) >= 18:
         return dict(
             result,
             status="possible_match",
-            summary=f"局部花纹几何命中「{nearest['name']}」（{nearest['local_inliers']} 处一致特征点），可优先核对。",
+            summary=f"局部花纹几何命中「{nearest['name']}」（{nearest['local_inliers']} 处一致特征点），可先对照历史照片核实。",
+        )
+    # Guard against over-confident cross-cat matching when distance is near the outer margin without local SIFT inliers
+    dist = float(nearest.get("distance", 0.0))
+    weak_cutoff = max_distance * (0.72 if encoder.VERSION else 0.78)
+    if dist > weak_cutoff and nearest.get("local_inliers", 0) < 12:
+        return dict(
+            result,
+            status="weak_candidate",
+            summary=f"仅整体毛色与「{nearest['name']}」有部分接近，局部特征吻合度偏弱（同花色不同猫易相似），请重点核对耳尖、鼻梁与四肢花纹。",
         )
     return dict(
         result,

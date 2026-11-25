@@ -7,13 +7,15 @@ import threading
 import time
 from collections import Counter, OrderedDict, defaultdict
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import ai_vision
+import clip_classifier
 import detector
 import face_match
 from face_match import automatic_match
 from media import Problem, canonical_photo, prepare, save_media, validate_boxes
-from vision import MODEL_VERSION, analyze_crop, assess_db_match, pixel_box, rank_candidates
+from vision import DEFAULT_MAX_DISTANCE, MODEL_VERSION, analyze_crop, assess_db_match, distance_to_similarity, pixel_box, rank_candidates
 
 SYLU_PRESET_AREAS = (
     "图书馆（琴园环路）",
@@ -239,14 +241,37 @@ def _load_candidate_crops(candidates, refs, media_dir):
 
 
 
+def _coat_conflict(query_coat, cand_coat):
+    """Return True when two coats are mutually incompatible (e.g. pure black vs orange/white)."""
+    q = (query_coat or "").strip()
+    c = (cand_coat or "").strip()
+    if not q or not c:
+        return False
+    groups = (
+        ("纯白", ("纯黑", "橘猫", "玳瑁", "黑猫")),
+        ("纯黑", ("纯白", "橘猫", "橘白", "三花", "白猫")),
+        ("橘猫", ("纯黑", "纯白", "奶牛", "蓝猫", "蓝白", "灰白")),
+        ("奶牛", ("橘猫", "纯白", "纯黑", "玳瑁")),
+    )
+    for key, incompatible in groups:
+        if key in q and any(inc in c for inc in incompatible):
+            return True
+        if key in c and any(inc in q for inc in incompatible):
+            return True
+    return False
+
+
 def detect_photo(body):
     _, image = canonical_photo(body.get("photo"))
-    detections = detector.detect_cats(image)
+    info = detector.inspect_image_subjects(image)
+    detections = info["cats"]
     return {
-        "detector_enabled": detector.is_enabled(),
+        "detector_enabled": detector.is_enabled() or clip_classifier.is_enabled(),
         "detections": detections,
         "boxes": [d["box"] for d in detections],
+        "non_cat_type": info["non_cat_type"],
     }
+
 
 def identify(db, body, media_dir=None):
     boxes = validate_boxes(body.get("boxes"))
@@ -260,41 +285,127 @@ def identify(db, body, media_dir=None):
     reference_count = len({r[0] for r in refs})
     results = []
     for box in boxes:
+        gate = detector.verify_box_is_cat(image, box)
+        if not gate["is_cat"]:
+            results.append({
+                "box": box,
+                "quality": [gate["reason"]],
+                "warnings": [gate["reason"]],
+                "usable": False,
+                "not_cat": True,
+                "non_cat_type": gate["non_cat_type"],
+                "candidates": [],
+                "breed_hint": None,
+                "record_status": assess_db_match(
+                    [], reference_count, area=area, usable=False,
+                    not_cat=True, not_cat_reason=gate["reason"],
+                ),
+                "ai_profile": None,
+                "vlm_compare": None,
+            })
+            continue
+
+        # === 第一关（纯本地 0.5s 免费初筛）：特征提取 + 本地毛色初判 + SIFT 重排缩成 Top-3 候选 ===
         analysis = analyze_crop(image, box)
         crop = image.crop(pixel_box(image, box)).convert("RGB")
-        # Stage 1: broad recall (up to 5 candidates), then Stage 2: SIFT face+body reranking -> Top 3
+        allow_remote = body.get("cloud_photo") is True
+        ai_profile = ai_vision.classify_cat_crop(crop, allow_remote=False) if analysis["usable"] else None
+
         candidates = matched_profiles(analysis, refs, cats, limit=5, area=area)
+        if ai_profile and candidates:
+            q_coat = ai_profile.get("coat", "")
+            filtered = []
+            for cand in candidates:
+                if _coat_conflict(q_coat, cand.get("coat", "")):
+                    new_dist = round(cand["distance"] + 0.08, 5)
+                    if new_dist > DEFAULT_MAX_DISTANCE:
+                        continue
+                    cand = dict(cand, distance=new_dist, similarity=distance_to_similarity(new_dist))
+                filtered.append(cand)
+            filtered.sort(key=lambda c: (c["distance"], str(c["id"])))
+            candidates = filtered
+
         if analysis["usable"] and candidates and media_dir is not None:
             candidates = face_match.rerank_with_local_features(crop, candidates, refs, media_dir)
+            candidates = [c for c in candidates if float(c.get("distance", 0.0)) <= DEFAULT_MAX_DISTANCE]
         candidates = candidates[:3]
-        allow_remote = body.get("cloud_photo") is True
+
+        # === 第二关（云端精准拍板，每只猫最多仅 1 次云端请求）===
+        # 有候选时：只发一张拼好的 [NEW | #1 | #2 | #3] 对比图，一次完成「同猫拍板 + 新猫品种毛色剪耳描述」；
+        # 无候选（新猫/空库）时：单独发 NEW 裁剪图识别毛色、品种与剪耳特征。
         remaining = deadline - time.monotonic()
-        # Stage 3: optional VLM pairwise side-by-side verification
         vlm_compare = None
-        if analysis["usable"] and allow_remote and candidates and media_dir is not None and remaining >= 3:
-            cand_crops = _load_candidate_crops(candidates, refs, media_dir)
-            vlm_compare = ai_vision.compare_candidates_vlm(
-                crop, cand_crops, allow_remote=True, timeout=min(12, max(2, remaining - 2))
-            )
-            if vlm_compare and vlm_compare.get("verdict") == "same_cat":
-                idx = vlm_compare.get("best_candidate_index")
-                conf = float(vlm_compare.get("confidence", 0.0))
-                if idx and 1 <= idx <= len(candidates) and conf >= 0.60:
-                    picked = candidates.pop(idx - 1)
-                    picked = dict(picked, similarity=round(max(float(picked.get("similarity", 0.0)), min(0.98, 0.55 + 0.43 * conf)), 4))
-                    candidates.insert(0, picked)
+        if analysis["usable"] and allow_remote and remaining >= 2:
+            if candidates and media_dir is not None:
+                cand_crops = _load_candidate_crops(candidates, refs, media_dir)
+                vlm_compare = ai_vision.compare_candidates_vlm(
+                    crop, cand_crops, allow_remote=True, timeout=min(15, max(2, remaining - 1))
+                )
+                if vlm_compare and vlm_compare.get("is_cat") is False:
+                    reason = vlm_compare.get("reason") or "视觉模型复核判定该画面并非猫咪，已拦截档案匹配。"
+                    results.append({
+                        "box": box,
+                        "quality": [reason],
+                        "warnings": [reason],
+                        "usable": False,
+                        "not_cat": True,
+                        "non_cat_type": vlm_compare.get("non_cat_type") or "other",
+                        "candidates": [],
+                        "breed_hint": None,
+                        "record_status": assess_db_match(
+                            [], reference_count, area=area, usable=False,
+                            not_cat=True, not_cat_reason=reason,
+                        ),
+                        "ai_profile": None,
+                        "vlm_compare": None,
+                    })
+                    continue
+                if vlm_compare and vlm_compare.get("ai_profile"):
+                    ai_profile = vlm_compare["ai_profile"]
+                if vlm_compare and vlm_compare.get("verdict") == "same_cat":
+                    idx = vlm_compare.get("best_candidate_index")
+                    conf = float(vlm_compare.get("confidence", 0.0))
+                    if idx and 1 <= idx <= len(candidates) and conf >= 0.65:
+                        picked = candidates.pop(idx - 1)
+                        picked = dict(picked, similarity=round(max(float(picked.get("similarity", 0.0)), min(0.98, 0.55 + 0.43 * conf)), 4))
+                        candidates.insert(0, picked)
+                elif vlm_compare and vlm_compare.get("verdict") == "different_cat" and float(vlm_compare.get("confidence", 0.0)) >= 0.65:
+                    candidates = []
+            else:
+                remote_profile = ai_vision.classify_cat_crop(
+                    crop, allow_remote=True, timeout=min(14, max(2, remaining - 1))
+                )
+                if remote_profile and remote_profile.get("is_cat") is False:
+                    reason = remote_profile.get("summary") or "视觉模型识别该画面并非猫咪，已拦截档案匹配。"
+                    results.append({
+                        "box": box,
+                        "quality": [reason],
+                        "warnings": [reason],
+                        "usable": False,
+                        "not_cat": True,
+                        "non_cat_type": remote_profile.get("non_cat_type") or "other",
+                        "candidates": [],
+                        "breed_hint": None,
+                        "record_status": assess_db_match(
+                            [], reference_count, area=area, usable=False,
+                            not_cat=True, not_cat_reason=reason,
+                        ),
+                        "ai_profile": None,
+                        "vlm_compare": None,
+                    })
+                    continue
+                if remote_profile:
+                    ai_profile = remote_profile
+
         record_status = assess_db_match(
             candidates, reference_count, area=area, usable=analysis["usable"], vlm_compare=vlm_compare
         )
-        remaining = deadline - time.monotonic()
-        ai_profile = ai_vision.classify_cat_crop(
-            crop, allow_remote=allow_remote and remaining >= 1, timeout=max(1, remaining)
-        ) if analysis["usable"] else None
         results.append({
             "box": box,
             "quality": analysis["warnings"],
             "warnings": analysis["warnings"],
             "usable": analysis["usable"],
+            "not_cat": False,
             "candidates": candidates,
             "breed_hint": breed_hint(candidates),
             "record_status": record_status,
@@ -397,6 +508,12 @@ def upload(db, media_dir, uid, body):
                 reference_days[cat_id].add(ref["day"])
         if not any(len(days) >= 2 for days in reference_days.values()):
             refs = []
+        if detector.is_enabled() or clip_classifier.is_enabled():
+            _, check_img = canonical_photo(body.get("photo"))
+            for box in boxes:
+                gate = detector.verify_box_is_cat(check_img, box)
+                if not gate["is_cat"]:
+                    raise Problem(gate["reason"] or "未在照片中检测到猫咪（识别为人像或非猫画面），请上传清晰的猫咪照片。", 422)
         filename, targets, media = prepare(body.get("photo"), boxes, verify=bool(refs))
         if db.execute("SELECT 1 FROM frames WHERE image=?", (filename,)).fetchone():
             frame_id = previous()

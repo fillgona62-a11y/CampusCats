@@ -55,8 +55,10 @@ function newRequestId() {
 function recordBadge(rs) {
     if (!rs) return '';
     const map = {
+        not_a_cat: ['danger', '非猫咪画面'],
         poor_quality: ['empty', '请补拍清晰照片'],
         ambiguous: ['possible', '多个相似候选'],
+        weak_candidate: ['weak', '外观弱相似 · 注意区分异猫'],
         possible_match: ['possible', '疑似已在库'],
         no_candidate: ['empty', '暂未找到相似档案'],
         no_reference: ['empty', '暂无参考库']
@@ -66,7 +68,7 @@ function recordBadge(rs) {
 }
 function aiProfileCard(ai) {
     if (!ai) return '';
-    const sourceTag = ai.source === 'vlm' ? 'AI 视觉初判' : '本地颜色初判';
+    const sourceTag = ai.source === 'vlm' ? 'AI 视觉复核' : ai.source === 'local_clip' ? '本地深度模型识别' : '本地颜色初判';
     const neuter = ai.neutered_hint === 'yes' ? '疑似可见剪耳绝育标记' : ai.neutered_hint === 'no' ? '未见明显剪耳' : '';
     const chips = [...(ai.features || []), ...(neuter ? [neuter] : [])];
     return `<div class="ai-profile-card"><div class="ai-profile-head"><strong>品种与花色识别</strong><span class="ai-tag">${sourceTag}</span></div>
@@ -88,7 +90,7 @@ export function capturePage(main, onSuccess, {saveLocal, draft, lookupOnly = fal
     <div class="mark-tools"><button type="button" class="btn light" id="mark-toggle" aria-pressed="false" aria-controls="stage">框选同框猫</button><button type="button" class="btn ghost" id="undo" hidden>撤销上一框</button></div>
     <p id="mark-help" class="hint" aria-live="polite"></p>
     <div class="capture-stage"><div class="target-stage" id="stage" aria-describedby="mark-help"><img id="preview" alt="本次目击照片" draggable="false"><div class="mark-layer" id="marks"></div></div></div>
-    <div class="advice" id="quality" role="status"></div><label class="hint" id="cloud-option" hidden><input name="cloud_photo" type="checkbox"> 允许本次查图将所选画面发送给配置的视觉模型</label><button type="button" class="btn light" id="identify">${icon('search')}照片查查 · 查重与花色识别</button>
+    <div class="advice" id="quality" role="status"></div><label class="hint" id="cloud-option" hidden><input name="cloud_photo" type="checkbox"> 启用第二关云端精准拍板（只将拼好的候选对比图发给视觉模型判定同猫、毛色与剪耳）</label><button type="button" class="btn light" id="identify">${icon('search')}照片查查 · 查重与花色识别</button>
     <p id="lookup-status" role="status" class="hint"></p><div id="results" aria-live="polite"></div><div id="record-fields" ${lookupOnly ? 'hidden inert' : ''}><hr class="divider"><h2>保存这次目击</h2><label class="field"><span>校园区域</span><input name="area" list="capture-areas" required maxlength="60" placeholder="例如，图书馆（琴园环路）或 兵器博物馆 / 兵器广场"><small>优先选择已有区域名称，方便归入同一地点统计。</small></label><div class="actions" style="margin:-4px 0 10px"><button type="button" class="btn ghost" id="locate-btn">${icon('pin')}定位当前位置</button><span id="geo-status" class="hint" style="margin:0">拍照或选图时会询问位置权限以关联猫猫出现地点。</span></div><datalist id="capture-areas"></datalist>
     <label class="field"><span>目击时间</span><input type="datetime-local" name="observed" required></label>
     <label class="field"><span>观察备注（选填）</span><textarea name="note" maxlength="800" rows="2" placeholder="例如，左前腿有一处橘色斑纹"></textarea></label><label class="hint"><input type="checkbox" name="automatic" checked> 允许自动关联已建档的猫</label><p class="hint">脸部特征充分吻合时自动记录重遇，其余目击待辨认。</p><p class="form-error" role="alert"></p><button type="submit" class="btn">${icon('book')}提交目击</button></div></form></div>`;
@@ -101,7 +103,7 @@ export function capturePage(main, onSuccess, {saveLocal, draft, lookupOnly = fal
         if (!draft?.area) form.elements.area.value = prefillArea;
     }
     let stream = null, monitor = null, disposed = false, photo = '', frame = null, boxes = [], suggestions = [], start = null, requestId = newRequestId(), revision = 0, acquire = 0, fileVersion = 0;
-    let gps = null, areaManuallyEdited = false;
+    let gps = null, areaManuallyEdited = false, hasCloudVision = false;
     function requestLocation(force = false) {
         if (lookupOnly || disposed) return;
         const geoEl = $('#geo-status');
@@ -176,6 +178,8 @@ export function capturePage(main, onSuccess, {saveLocal, draft, lookupOnly = fal
         suggestions = [];
         $('#results').replaceChildren();
         $('#identify').disabled = false;
+        const submitBtn = form.querySelector('[type=submit]');
+        if (submitBtn) submitBtn.disabled = false;
         $('#lookup-status').textContent = '';
         setDrawing(false);
         $('#quality').textContent = targets().map((box, i) => `猫 ${i + 1} · ${qualityHints(frame, box).join(' ') || '画面初检通过，可对照脸部和侧身花纹。'}`).join('　');
@@ -192,12 +196,21 @@ export function capturePage(main, onSuccess, {saveLocal, draft, lookupOnly = fal
                 draw();
                 $('#undo').hidden = !boxes.length;
                 $('#mark-toggle').textContent = boxes.length ? '再框一只' : '框选同框猫';
-                $('#mark-help').textContent = `已自动框出 ${boxes.length} 只猫，可直接查重或手动调整。`;
+                $('#mark-help').textContent = boxes.length > 1
+                    ? `已自动框出同框的 ${boxes.length} 只猫，将逐只比对档案与识别品种。`
+                    : `已自动框出 1 只猫，可直接查重或手动调整。`;
                 $('#quality').textContent = targets().map((box, i) => `猫 ${i + 1} · ${qualityHints(frame, box).join(' ') || '画面初检通过，可对照脸部和侧身花纹。'}`).join('　');
             } else if (det?.detector_enabled) {
                 noCatDetected = true;
-                $('#mark-help').textContent = '未在画面中检测到猫。如画面里确实有猫，请点「框选同框猫」手动框出。';
-                $('#results').innerHTML = `<hr class="divider"><section class="sheet"><div class="record-box empty"><span class="record-badge empty">未检测到猫咪</span><p>画面中未识别到猫（可能是人像、景物或猫体过小被遮挡），已跳过花色与档案匹配。如果图里确实有猫，请先手动框选再点「照片查查」。</p></div></section>`;
+                const subjectMsg = det.non_cat_type === 'person'
+                    ? '画面识别为人像且未检测到猫咪，已拦截误识别与花色匹配。'
+                    : det.non_cat_type === 'dog'
+                        ? '画面识别为犬类而非猫咪，已拦截误识别。'
+                        : '画面中未识别到猫（可能是人像、景物或猫体过小被遮挡），已跳过花色与档案匹配。';
+                $('#mark-help').textContent = '未在画面中检测到猫。如远景中确实有猫，请点「框选同框猫」手动框出猫咪位置。';
+                $('#results').innerHTML = `<hr class="divider"><section class="sheet"><div class="record-box danger"><span class="record-badge danger">未检测到猫咪</span><p>${esc(subjectMsg)}如果照片局部确实有猫，请手动框选猫身后再点「照片查查」。</p></div></section>`;
+                const submitBtn = form.querySelector('[type=submit]');
+                if (submitBtn && !saveLocal) submitBtn.disabled = true;
                 feedback.textContent = '';
             }
         } catch {
@@ -210,7 +223,7 @@ export function capturePage(main, onSuccess, {saveLocal, draft, lookupOnly = fal
         }
     }
     function useFrame(next) {
-        form.elements.cloud_photo.checked = false;
+        form.elements.cloud_photo.checked = hasCloudVision;
         frame = next;
         photo = frame.toDataURL('image/jpeg', .86);
         boxes = [];
@@ -298,7 +311,11 @@ export function capturePage(main, onSuccess, {saveLocal, draft, lookupOnly = fal
         $('#shutter').textContent = '拍下照片';
     }
     api('/agent/status').then(status => {
-        if (!disposed) $('#cloud-option').hidden = status.vision_mode !== 'vlm';
+        if (!disposed) {
+            hasCloudVision = status.vision_mode === 'vlm';
+            $('#cloud-option').hidden = !hasCloudVision;
+            if (hasCloudVision) form.elements.cloud_photo.checked = true;
+        }
     }).catch(() => {});
     if (!lookupOnly) {
         api('/areas').then(res => {

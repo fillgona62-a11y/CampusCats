@@ -1,10 +1,11 @@
-"""Cat breed, coat pattern, and distinctive feature recognition.
+"""Cat breed, coat pattern, species gate, and distinctive feature recognition (v0.6.0).
 
-Supports two modes:
-1. OpenAI-compatible Vision LLM API (configured via CAMPUSCATS_LLM_API_KEY /
-   CAMPUSCATS_LLM_BASE_URL / CAMPUSCATS_VISION_MODEL).
-2. Zero-dependency offline HSV heuristic fallback so the app always returns
-   structured coat & breed hints even without external API keys.
+Supports three progressive tiers:
+1. OpenAI-compatible Vision LLM API (GPT-4o-mini / GLM-4V-Flash / Qwen2.5-VL / Qwen-VL-Plus)
+   — includes `is_cat` anti-human/anti-dog verification, breed, coat, ear-tip & fine markings.
+2. Local zero-cost ONNX CLIP-ViT-B/32 INT8 classifier (`clip_classifier.py`)
+   — recognizes 16 cat breeds/types and 11 coat patterns completely offline.
+3. Foreground-weighted HSV heuristic fallback so bare unit-test / zero-model environments still work.
 """
 
 import base64
@@ -16,6 +17,7 @@ import urllib.error
 import urllib.request
 
 from PIL import Image
+import clip_classifier
 import providers
 
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
@@ -72,7 +74,7 @@ def _extract_json(text):
 
 
 def _heuristic_profile(crop):
-    """Lightweight offline coat & breed estimate from central HSV distribution."""
+    """Lightweight offline coat estimate from elliptical foreground HSV distribution."""
     rgb = crop.convert("RGB")
     hsv = rgb.resize((48, 48), Image.Resampling.LANCZOS).convert("HSV")
     raw = hsv.tobytes()
@@ -87,7 +89,12 @@ def _heuristic_profile(crop):
     for i in range(48 * 48):
         h, s, v = raw[3 * i : 3 * i + 3]
         x, y = i % 48, i // 48
-        w = 2.0 if 8 <= x < 40 and 8 <= y < 40 else 1.0
+        dx = (x - 23.5) / 21.0
+        dy = (y - 23.5) / 21.0
+        r2 = dx * dx + dy * dy
+        if r2 > 1.05:
+            continue
+        w = 3.0 if r2 <= 0.45 else 1.0
         total += w
         if v < 52:
             black += w
@@ -102,6 +109,7 @@ def _heuristic_profile(crop):
         else:
             gray += w
 
+    total = max(total, 1.0)
     ratios = {
         "orange": orange / total,
         "white": white / total,
@@ -142,25 +150,28 @@ def _heuristic_profile(crop):
         coat = "混合花色"
 
     return {
+        "is_cat": True,
         "source": "local_heuristic",
         "breed": "未知",
         "breed_confidence": "low",
         "coat": coat,
         "features": features,
         "neutered_hint": "unknown",
-        "summary": f"本地颜色纹理初判为「{coat}」花色；配置多模态 API 后可进一步识别具体品种、剪耳及细部特征。",
+        "summary": f"本地颜色纹理初判为「{coat}」花色；安装本地 CLIP 品种模型或配置多模态 API 后可识别具体品种与剪耳特征。",
     }
 
 
 def _call_vlm(crop, cfg):
     b64 = _encode_jpeg_b64(crop)
     prompt = (
-        "你是一位校园流浪猫图鉴识别专家。请观察这张猫的照片，仅输出严格 JSON，不要包含额外解释。"
-        "字段要求：\n"
+        "你是一位校园流浪猫图鉴识别专家。请先判断画面主体是否为猫（若为人像、自拍、狗、其他动物或无猫景物，必须设 is_cat 为 false），"
+        "再输出严格 JSON，不要包含任何额外文字：\n"
         '{\n'
-        '  "breed": "最可能的猫品种中文名，如 中华田园猫 / 英国短毛猫 / 美国短毛猫 / 布偶猫 / 暹罗猫 / 折耳猫 / 未知",\n'
+        '  "is_cat": true 或 false,\n'
+        '  "non_cat_type": "person | dog | other | null",\n'
+        '  "breed": "最可能的猫品种中文名，如 中华田园猫 / 英国短毛猫 / 美国短毛猫 / 布偶猫 / 暹罗猫 / 波斯猫 / 缅因猫 / 未知",\n'
         '  "breed_confidence": "high | medium | low",\n'
-        '  "coat": "简洁花色与毛长描述，如 橘白短毛 / 狸花短毛 / 奶牛猫 / 三花 / 玳瑁 / 蓝白",\n'
+        '  "coat": "简洁花色与毛长描述，如 橘白短毛 / 狸花短毛 / 奶牛猫 / 三花 / 玳瑁 / 蓝白 / 纯白 / 纯黑",\n'
         '  "features": ["最多4条肉眼可见的显著辨识特征，如 左耳剪耳 / 白手套 / 粉色鼻头 / 佩戴项圈"],\n'
         '  "neutered_hint": "yes | no | unknown（根据是否可见绝育剪耳标记判断）",\n'
         '  "summary": "一句25字以内的中文总结"\n'
@@ -168,8 +179,6 @@ def _call_vlm(crop, cfg):
     )
     payload = {
         "model": cfg["vision_model"],
-        "temperature": 0.1,
-        "max_tokens": 300,
         "messages": [
             {
                 "role": "user",
@@ -181,7 +190,6 @@ def _call_vlm(crop, cfg):
         ],
     }
     if cfg.get("scope"):
-        payload.pop("temperature", None)
         raw = providers.completion(cfg, payload)
     else:
         raw = _environment_completion(cfg, payload)
@@ -196,7 +204,7 @@ def _environment_completion(cfg, payload):
         headers={
             "Content-Type": "application/json",
             "Authorization": f"Bearer {cfg['api_key']}",
-            "User-Agent": "CampusCats-Server/2.0",
+            "User-Agent": "CampusCats-Server/2.1",
         },
         method="POST",
     )
@@ -211,6 +219,21 @@ def _vision_result(raw, model):
     parsed = _extract_json(content)
     if not parsed:
         return None
+    if parsed.get("is_cat") is False:
+        non_cat = str(parsed.get("non_cat_type") or "other").lower()
+        label = "人像" if non_cat == "person" else "犬类" if non_cat == "dog" else "非猫咪目标"
+        return {
+            "is_cat": False,
+            "non_cat_type": non_cat,
+            "source": "vlm",
+            "model": model,
+            "breed": "非猫咪",
+            "breed_confidence": "high",
+            "coat": "非猫咪",
+            "features": [],
+            "neutered_hint": "unknown",
+            "summary": str(parsed.get("summary") or f"视觉模型识别该画面为{label}，未发现猫咪。").strip()[:120],
+        }
     confidence = str(parsed.get("breed_confidence", "medium")).lower()
     if confidence not in ("high", "medium", "low"):
         confidence = "medium"
@@ -223,6 +246,7 @@ def _vision_result(raw, model):
     coat = str(parsed.get("coat", "")).strip()[:60] or "花色待补充"
     summary = str(parsed.get("summary", "")).strip()[:120] or f"AI 识别为{breed}（{coat}）"
     return {
+        "is_cat": True,
         "source": "vlm",
         "model": model,
         "breed": breed,
@@ -244,6 +268,13 @@ def classify_cat_crop(crop, *, allow_remote=False, timeout=None):
                 return result
         except (OSError, ValueError, KeyError, IndexError, TypeError, AttributeError):
             pass
+
+    if clip_classifier.is_enabled():
+        clip_profile = clip_classifier.classify_breed_and_coat(crop)
+        if clip_profile is not None:
+            clip_profile["is_cat"] = True
+            return clip_profile
+
     return _heuristic_profile(crop)
 
 
@@ -277,7 +308,7 @@ def _make_comparison_sheet(query_crop, candidate_items):
 
 
 def compare_candidates_vlm(query_crop, candidate_items, *, allow_remote=False, timeout=None):
-    """Use Vision LLM on a stitched side-by-side comparison sheet to verify if NEW matches #1/#2/#3."""
+    """Single-sheet Stage 2 VLM call: inspects [NEW | #1 | #2 | #3] once to decide both identity match AND NEW's coat/breed/ear-clip."""
     if not allow_remote or not candidate_items:
         return None
     cfg = llm_config()
@@ -291,24 +322,32 @@ def compare_candidates_vlm(query_crop, candidate_items, *, allow_remote=False, t
     for idx, item in enumerate(candidate_items[:3], 1):
         cand_lines.append(f"#{idx}: {item.get('name', '未命名')}（{item.get('coat') or '花色待补'}，常出没：{item.get('area') or '未知'}）")
     prompt = (
-        "你是一位校园流浪猫个体辨认专家。上图最左侧橙色标题「NEW」是刚拍到的待识别猫，右侧「#1」「#2」「#3」是图鉴里的候选猫参考照：\n"
+        "你是一位校园流浪猫个体辨认专家。上图最左侧橙色标题「NEW」是刚拍到的待识别画面，右侧「#1」「#2」「#3」是本地初筛出的最像候选猫参考照：\n"
         + "\n".join(cand_lines)
-        + "\n请重点逐项对比：额头纹/M纹走向、鼻梁与嘴周白斑边界、耳朵是否剪耳/缺口、胸前与四肢花纹边界，判断 NEW 是否与其中某一只为同一只猫。"
-        "严格输出 JSON，不要包含额外解释：\n"
+        + "\n请只看这一张拼好的对比图，一次性完成两件事："
+        "\n1）身份拍板：逐项对比额头纹/M纹走向、鼻梁与嘴周白斑边界、耳朵是否剪耳/缺口、胸腹四肢花纹；校园里同花色异猫很常见，局部斑纹不一致请果断判为 different_cat（若 NEW 根本不是猫则设 is_cat 为 false）。"
+        "\n2）NEW 自身特征描述：给出 NEW 的品种初判、毛色描述、是否可见绝育剪耳标记及显著外观特征。"
+        "\n严格输出 JSON，不要包含任何额外解释：\n"
         '{\n'
+        '  "is_cat": true 或 false,\n'
+        '  "non_cat_type": "person | dog | other | null",\n'
         '  "verdict": "same_cat | different_cat | uncertain",\n'
         '  "best_candidate_index": 1 或 2 或 3 或 null,\n'
         '  "confidence": 0.0 到 1.0 之间的小数,\n'
         '  "matching_features": ["最多3条一致的局部花纹特征"],\n'
         '  "differences": ["最多3条观察到的差异或不确定点"],\n'
-        '  "reason": "一句50字以内的中文比对结论"\n'
+        '  "reason": "一句50字以内的中文比对拍板结论",\n'
+        '  "breed": "NEW 最可能的猫品种中文名，如 中华田园猫 / 英国短毛猫 / 布偶猫 / 未知",\n'
+        '  "breed_confidence": "high | medium | low",\n'
+        '  "coat": "NEW 的简洁毛色与毛长描述，如 橘白短毛 / 狸花短毛 / 奶牛猫 / 三花",\n'
+        '  "features": ["NEW 最多4条显著外观特征，如 左耳平剪耳 / 鼻梁白通天 / 白手套"],\n'
+        '  "neutered_hint": "yes | no | unknown（NEW 是否可见绝育剪耳标记）",\n'
+        '  "summary": "一句25字以内的 NEW 外观特征总结"\n'
         '}'
     )
     eff_cfg = dict(cfg, timeout=min(cfg["timeout"], timeout)) if timeout is not None else cfg
     payload = {
         "model": eff_cfg["vision_model"],
-        "temperature": 0.1,
-        "max_tokens": 360,
         "messages": [
             {
                 "role": "user",
@@ -321,7 +360,6 @@ def compare_candidates_vlm(query_crop, candidate_items, *, allow_remote=False, t
     }
     try:
         if eff_cfg.get("scope"):
-            payload.pop("temperature", None)
             raw = providers.completion(eff_cfg, payload)
         else:
             raw = _environment_completion(eff_cfg, payload)
@@ -331,6 +369,19 @@ def compare_candidates_vlm(query_crop, candidate_items, *, allow_remote=False, t
         parsed = _extract_json(content)
         if not parsed:
             return None
+        if parsed.get("is_cat") is False:
+            return {
+                "source": "vlm",
+                "is_cat": False,
+                "non_cat_type": str(parsed.get("non_cat_type") or "other").lower(),
+                "verdict": "different_cat",
+                "best_candidate_index": None,
+                "confidence": 1.0,
+                "matching_features": [],
+                "differences": [],
+                "reason": str(parsed.get("reason") or parsed.get("summary") or "云端复核判定该画面并非猫咪。").strip()[:120],
+                "ai_profile": None,
+            }
         verdict = str(parsed.get("verdict", "uncertain")).lower()
         if verdict not in ("same_cat", "different_cat", "uncertain"):
             verdict = "uncertain"
@@ -345,14 +396,40 @@ def compare_candidates_vlm(query_crop, candidate_items, *, allow_remote=False, t
             conf = max(0.0, min(1.0, float(parsed.get("confidence", 0.5))))
         except (TypeError, ValueError):
             conf = 0.5
+
+        embedded_profile = None
+        if parsed.get("coat") or parsed.get("breed"):
+            b_conf = str(parsed.get("breed_confidence", "medium")).lower()
+            if b_conf not in ("high", "medium", "low"):
+                b_conf = "medium"
+            neuter = str(parsed.get("neutered_hint", "unknown")).lower()
+            if neuter not in ("yes", "no", "unknown"):
+                neuter = "unknown"
+            breed = str(parsed.get("breed", "")).strip()[:60] or "未知"
+            coat = str(parsed.get("coat", "")).strip()[:60] or "花色待补充"
+            feats = [str(x).strip()[:40] for x in (parsed.get("features") or []) if str(x).strip()][:4]
+            embedded_profile = {
+                "is_cat": True,
+                "source": "vlm",
+                "model": eff_cfg["vision_model"],
+                "breed": breed,
+                "breed_confidence": b_conf,
+                "coat": coat,
+                "features": feats,
+                "neutered_hint": neuter,
+                "summary": str(parsed.get("summary", "")).strip()[:120] or f"云端识别为{breed}（{coat}）",
+            }
+
         return {
             "source": "vlm",
+            "is_cat": True,
             "verdict": verdict,
             "best_candidate_index": idx,
             "confidence": round(conf, 3),
             "matching_features": [str(x).strip()[:40] for x in (parsed.get("matching_features") or []) if str(x).strip()][:3],
             "differences": [str(x).strip()[:40] for x in (parsed.get("differences") or []) if str(x).strip()][:3],
             "reason": str(parsed.get("reason", "")).strip()[:120],
+            "ai_profile": embedded_profile,
         }
     except (OSError, ValueError, KeyError, IndexError, TypeError, AttributeError):
         return None

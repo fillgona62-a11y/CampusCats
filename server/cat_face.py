@@ -83,6 +83,42 @@ def _scan(image):
     return zip(x.tolist(), y.tolist())
 
 
+def detect_face_box(gray_img):
+    """Pure-NumPy fallback returning (x, y, w, h) of largest detected cat face, or None."""
+    if np is None or min(gray_img.size) < 48:
+        return None
+    work = gray_img.copy()
+    scale_back = 1.0
+    if max(work.size) > 192:
+        scale_back = max(work.size) / 192.0
+        work = work.resize(
+            (max(24, round(work.width / scale_back)), max(24, round(work.height / scale_back))),
+            Image.Resampling.BILINEAR,
+        )
+    eq = ImageOps.equalize(work)
+    previous = []
+    hits = []
+    scale = 1.0
+    while round(min(eq.size) / scale) >= 24:
+        level = eq.resize((round(eq.width / scale), round(eq.height / scale)), Image.Resampling.BILINEAR)
+        for x, y in _scan(level):
+            cx, cy = (x + 12) * scale, (y + 12) * scale
+            for px, py, ps in previous:
+                if scale <= 1.55 * ps and math.hypot(cx - px, cy - py) < 5 * ps:
+                    side = 24.0 * scale * scale_back
+                    bx = max(0, int(round(cx * scale_back - side / 2.0)))
+                    by = max(0, int(round(cy * scale_back - side / 2.0)))
+                    bw = min(gray_img.width - bx, int(round(side)))
+                    bh = min(gray_img.height - by, int(round(side)))
+                    hits.append((bw * bh, (bx, by, bw, bh)))
+            previous.append((cx, cy, scale))
+        scale *= 1.25
+    if not hits:
+        return None
+    hits.sort(key=lambda item: item[0], reverse=True)
+    return hits[0][1]
+
+
 def has_frontal_face(crop):
     """Return True/False after a scan, or None if NumPy is unavailable."""
     if np is None:
@@ -92,7 +128,7 @@ def has_frontal_face(crop):
     if min(gray.size) < 24:
         return False
     gray = ImageOps.equalize(gray)
-    if cv2 is not None:
+    if cv2 is not None and hasattr(cv2, "CascadeClassifier"):
         if not hasattr(_PER_THREAD, "cascade"):
             _PER_THREAD.cascade = cv2.CascadeClassifier(str(MODEL_FILE))
         rects = _PER_THREAD.cascade.detectMultiScale(np.asarray(gray), scaleFactor=1.2, minNeighbors=2)

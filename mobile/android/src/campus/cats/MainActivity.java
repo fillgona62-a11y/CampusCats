@@ -116,8 +116,13 @@ public final class MainActivity extends Activity {
             else return missing();
             try {
                 WebResourceResponse res = new WebResourceResponse(mime, mime.startsWith("image/") ? null : "UTF-8", getAssets().open(name));
-                if (name.equals("index.html")) res.setResponseHeaders(java.util.Collections.singletonMap("Content-Security-Policy",
-                    "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://*.amap.com https://*.autonavi.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://*.amap.com https://*.autonavi.com; media-src 'self' blob:; connect-src 'self' blob: data: https://*.amap.com https://*.autonavi.com; frame-src 'none'; object-src 'none'; base-uri 'none'"));
+                if (name.equals("index.html")) {
+                    java.util.Map<String, String> hdrs = new java.util.HashMap<>();
+                    hdrs.put("Referrer-Policy", "strict-origin-when-cross-origin");
+                    hdrs.put("Content-Security-Policy",
+                        "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://*.amap.com https://*.autonavi.com; worker-src 'self' blob:; child-src blob:; font-src 'self' data: https://*.amap.com https://*.autonavi.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://*.amap.com https://*.autonavi.com https://*.is.autonavi.com; media-src 'self' blob:; connect-src 'self' blob: data: https://*.amap.com https://*.autonavi.com; frame-src 'none'; object-src 'none'; base-uri 'none'");
+                    res.setResponseHeaders(hdrs);
+                }
                 return res;
             } catch (IOException ex) { return missing(); }
         }

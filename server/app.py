@@ -112,11 +112,12 @@ class App:
         with closing(connect(self.db_path)) as db, db:
             db.executescript((HERE/"schema.sql").read_text(encoding="utf-8"))
             migrate(db)
+            accounts.ensure_admin(db)
 
     def __call__(self, env, start_response):
         method, path = env["REQUEST_METHOD"], env["PATH_INFO"]
         headers = [("Cache-Control","no-store"),("X-Content-Type-Options","nosniff"),
-                   ("Referrer-Policy","same-origin")]
+                   ("Referrer-Policy","strict-origin-when-cross-origin")]
         provider_token = None
         status = 200
         try:
@@ -291,7 +292,7 @@ class App:
             actor = f"user:{user['id']}" if user else f"guest:{peer}"
             if path == "/api/agent/chat":
                 accounts.throttle(db, f"agent:{actor}", 60, 3600)
-                return agent.chat(db, read_json(env, 9 * 1024 * 1024))
+                return agent.chat(db, read_json(env, 9 * 1024 * 1024), media_dir=self.media)
             accounts.throttle(db, f"photo:{actor}", 180, 3600)
             if path == "/api/detect":
                 return detect_photo(read_json(env, 9 * 1024 * 1024))

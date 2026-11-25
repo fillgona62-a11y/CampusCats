@@ -69,3 +69,19 @@
    - 自动按地点汇总已建档校园猫数量并高亮显示，点击标点查看该点位猫咪档案，并支持一键「在这里记录目击」（自动预填地点名）；纯矢量 SVG 零外网地图依赖，同时适配浅色与深墨绿夜间模式。
 2. **全站地点与沈阳理工大学校内测试适配**（`server/catalog.py`、`web/capture.js`、`web/surveys.js`、`web/agent.js`、`web/index.html`、`web/sw.js`）
    - `/api/areas` 预置 10 个沈阳理工大学标准点位供拍照记录与定点观察下拉选择（不影响管理员自定义标准区域）；首页新增「沈理猫地图」快捷入口，离线缓存升级至 `campuscats-shell-v12`。
+
+
+---
+
+# CampusCats v0.6.0-SYLU 地图、防误识、个体检索与智能助手全面升级
+
+1. **高德地图 JS API 2.0 实景全量启用并彻底移除离线 SVG 地图**（`web/campus-map.js`、`web/style.css`、`server/app.py`、`deploy/nginx.conf.example`、`mobile/android/src/campus/cats/MainActivity.java`）
+   - 修复 `Referrer-Policy: same-origin` 导致高德脚本请求丢失域名 `Referer` 触发 `10006 INVALID_USER_DOMAIN` / `ERR_BLOCKED_BY_ORB` 的根因，改为 `strict-origin-when-cross-origin` 并在 `<script>` 显式声明 `referrerPolicy="origin"`。
+   - 补齐安卓 WebView CSP 的 `worker-src 'self' blob:` 与 `*.autonavi.com` / `*.is.autonavi.com` 瓦片白名单，彻底删除全部旧版离线 SVG 地图渲染逻辑与冗余样式。
+2. **全链路防人像/非猫误识别与多猫依偎 Soft-NMS 检测**（`server/detector.py`、`server/clip_classifier.py`、`server/catalog.py`、`server/ai_vision.py`、`web/capture.js`）
+   - 升级 80 类全类别对比过滤（拦截 `person` 与 `dog` 占优锚框）、Gaussian Soft-NMS 与大图多尺度分块检测；在 `/api/identify`、`/api/sightings`（HTTP 422 拒收人像）与 `/api/agent/chat` 全链路拦截非猫咪画面。
+3. **修复异猫误匹配与本地零成本 16 品种识别引擎**（`server/encoder.py`、`server/vision.py`、`server/face_match.py`、`server/clip_classifier.py`、`deploy/install_reid_model.py`）
+   - `encoder.py` 升级 `DINOv2` 空间局部 Patch（前景 GeM + 头耳上半区 + 胸肢下半区）与 CLS 融合编码（`v6`），消除仅靠全局 CLS 语义导致的异猫高相似倾向；新增 `weak_candidate` 弱相似提示、双正脸零内点惩罚与花色互斥过滤。
+   - `install_reid_model.py` 一键下载并校验 `dinov2-base-q8.onnx`、`yolov8s.onnx` 与 `clip-vision-q8.onnx` + 预计算 `clip-cat-prompts.npz`，无需 PyTorch 即可离线识别 16 类猫品种与 11 类花色。
+4. **猫猫助手重构与云端免费/学校 GPT 模型预设**（`server/agent.py`、`server/providers.py`、`web/agent.js`、`web/agent-settings.js`）
+   - 接入自动多猫检测与 `media_dir` 局部几何重排，修复无空格中文自然提问检索、Markdown 列表/加粗渲染，并内置 OpenAI GPT、智谱 `glm-4v-flash`、硅基流动 `Qwen2.5-VL`、通义千问与 DeepSeek 一键填入预设。

@@ -2057,66 +2057,8 @@ body {
   }
 }
 /* ==========================================================================
-   Shenyang Ligong University (SYLU) Interactive Campus Cat Map (v0.4.3)
+   Shenyang Ligong University (SYLU) Gaode Campus Cat Map & v0.6.0 UI Additions
    ========================================================================== */
-.sylu-map-page {
-  max-width:1080px;
-  margin:0 auto;
-}
-.map-stage-card {
-  padding:var(--sp-4);
-}
-.map-legend {
-  display:flex;
-  align-items:center;
-  flex-wrap:wrap;
-  gap:14px;
-  margin-bottom:var(--sp-3);
-  font-size:13px;
-  color:var(--muted);
-}
-.map-legend .dot {
-  display:inline-block;
-  width:10px;
-  height:10px;
-  border-radius:50%;
-  margin-right:4px;
-  vertical-align:middle;
-}
-.map-legend .dot.has-cats { background:var(--ginger); }
-.map-legend .dot.empty-dot { background:var(--deep); opacity:.55; }
-.map-legend .map-addr { margin-left:auto; font-weight:600; color:var(--ink); }
-.sylu-svg-wrap {
-  width:100%;
-  overflow-x:auto;
-  border-radius:var(--r-md);
-}
-.sylu-svg {
-  display:block;
-  width:100%;
-  height:auto;
-  min-width:300px;
-  user-select:none;
-}
-.map-ground { fill:var(--paper); stroke:var(--line); stroke-width:2; }
-.map-road-outer { stroke:var(--line); stroke-width:6; stroke-linecap:round; }
-.map-road { stroke:var(--sub); stroke-width:8; stroke-linecap:round; }
-.map-ring { fill:none; stroke:var(--sub); stroke-width:12; }
-.map-track { fill:color-mix(in srgb, var(--ginger) 14%, var(--paper)); stroke:color-mix(in srgb, var(--ginger) 42%, var(--line)); stroke-width:2; }
-.map-lawn { fill:color-mix(in srgb, var(--lime) 42%, var(--paper)); stroke:var(--line); stroke-width:1.5; }
-.map-plaza { fill:var(--accent); stroke:var(--line); stroke-width:1.5; stroke-dasharray:4 4; }
-.map-road-label { fill:var(--muted); font:600 12px var(--sans); }
-.map-sub-label { fill:var(--muted); font:600 11px var(--sans); letter-spacing:.08em; }
-.compass-bg { fill:var(--card); stroke:var(--line); stroke-width:1.5; }
-.map-pin { cursor:pointer; outline:none; }
-.map-pin .pin-circle { fill:var(--deep); stroke:var(--card); stroke-width:3; transition:transform .16s ease, fill .16s ease; }
-.map-pin.has-cats .pin-circle { fill:var(--ginger); }
-.map-pin .pin-pulse { fill:var(--ginger); opacity:.22; }
-.map-pin.active .pin-circle { stroke:var(--lime); stroke-width:4; transform:scale(1.16); }
-.map-pin .pin-count { fill:#fffef8; font:700 13px var(--sans); pointer-events:none; }
-.map-pin .pin-label-bg { fill:var(--card); stroke:var(--line); stroke-width:1.2; }
-.map-pin.active .pin-label-bg { stroke:var(--deep); fill:var(--accent); }
-.map-pin .pin-label { fill:var(--ink); font:600 11.5px var(--sans); pointer-events:none; }
 .map-panel {
   margin-top:var(--sp-4);
 }
@@ -2140,7 +2082,62 @@ body {
   gap:var(--sp-3);
   margin-top:var(--sp-5);
 }
+.record-box.danger {
+  border-color:rgba(196,62,47,.38);
+  background:rgba(196,62,47,.08);
+}
+.record-badge.danger {
+  background:#b8382a;
+  color:#fffef8;
+}
+.record-box.weak {
+  border-color:rgba(217,130,43,.36);
+  background:var(--ginger-soft);
+}
+.record-badge.weak {
+  background:var(--ginger);
+  color:#fffef8;
+}
+.preset-bar {
+  display:flex;
+  flex-wrap:wrap;
+  gap:8px;
+  margin:6px 0 14px;
+}
+.preset-chip {
+  padding:6px 11px;
+  border-radius:999px;
+  border:1px solid var(--line);
+  background:var(--sub);
+  color:var(--ink);
+  font:600 12.5px/1.3 var(--sans);
+  cursor:pointer;
+  transition:border-color .15s ease, background .15s ease;
+}
+.preset-chip:hover {
+  border-color:var(--deep);
+  background:var(--accent);
+}
+.agent-text p {
+  margin:0 0 6px;
+}
+.agent-text p:last-child {
+  margin-bottom:0;
+}
+.agent-text ul,
+.agent-text ol {
+  margin:4px 0 6px;
+  padding-left:18px;
+}
+.agent-text li {
+  margin:2px 0;
+}
+.agent-text code {
+  padding:1px 5px;
+  border-radius:4px;
+  background:var(--sub);
+  font-size:12.5px;
+}
 @media(max-width:680px) {
   .field-links.cols-5 { grid-template-columns:1fr; }
-  .map-legend .map-addr { margin-left:0; }
 }

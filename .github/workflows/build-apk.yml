@@ -70,13 +70,20 @@ jobs:
           "$BT/zipalign" -f 4 "$WORK/unsigned.apk" "$WORK/aligned.apk"
 
           KEY="$WORK/campuscats-signing.jks"
-          keytool -genkeypair -keystore "$KEY" -storetype JKS \
-            -storepass android -keypass android -alias pilot \
-            -keyalg RSA -keysize 2048 -validity 3650 -dname "CN=Campus Cats Release"
+          KS_ALIAS="${ANDROID_KEY_ALIAS:-pilot}"
+          KS_PASS="${ANDROID_KEYSTORE_PASSWORD:-android}"
+          KEY_PASS="${ANDROID_KEY_PASSWORD:-$KS_PASS}"
+          if [ -n "${ANDROID_KEYSTORE_BASE64:-}" ]; then
+            echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$KEY"
+          else
+            keytool -genkeypair -keystore "$KEY" -storetype JKS \
+              -storepass "$KS_PASS" -keypass "$KEY_PASS" -alias "$KS_ALIAS" \
+              -keyalg RSA -keysize 2048 -validity 3650 -dname "CN=Campus Cats Release"
+          fi
 
           mkdir -p dist
           "$BT/apksigner" sign --v4-signing-enabled false --ks "$KEY" \
-            --ks-key-alias pilot --ks-pass pass:android --key-pass pass:android \
+            --ks-key-alias "$KS_ALIAS" --ks-pass "pass:$KS_PASS" --key-pass "pass:$KEY_PASS" \
             --out dist/CampusCats-Android.apk "$WORK/aligned.apk"
           "$BT/apksigner" verify --verbose dist/CampusCats-Android.apk
 
