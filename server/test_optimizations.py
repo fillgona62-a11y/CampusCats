@@ -13,7 +13,10 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
-import numpy as np
+try:
+    import numpy as np
+except ImportError:
+    np = None
 from PIL import Image, ImageDraw
 
 import accounts
@@ -287,6 +290,7 @@ class OptimizationSuite(unittest.TestCase):
         finally:
             small_sem.release()
 
+    @unittest.skipIf(np is None, "numpy not installed")
     def test_vectorized_ranking_equivalence_and_letterbox_embed(self):
         base_img = Image.open(io.BytesIO(base64.b64decode(self.patterned_photo(0))))
         query = vision.analyze_crop(base_img, [0, 0, 1, 1])

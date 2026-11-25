@@ -66,6 +66,7 @@ class RecognitionV044Tests(unittest.TestCase):
         self.assertTrue(ranked)
         self.assertEqual(ranked[0]["cat_id"], 1)
 
+    @unittest.skipIf(face_match.cv2 is None, "OpenCV not installed")
     def test_body_sift_rerank_boosts_true_match(self):
         orange_cat = _synth_cat_image((212, 138, 68), (158, 86, 32), asymmetry="left")
         other_cat = _synth_cat_image((208, 136, 72), (180, 118, 56), asymmetry="right")

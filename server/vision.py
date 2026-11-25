@@ -91,7 +91,7 @@ def _normalize_lighting(crop):
     """Mild illumination & white-balance stabilization so shadow/backlight still matches."""
     small = crop.resize((64, 64), Image.Resampling.LANCZOS).convert("RGB")
     if np is None:
-        return small
+        return Image.blend(small, ImageOps.autocontrast(small, cutoff=2), 0.75)
     arr = np.asarray(small, dtype=np.float32)
     # Mild Gray-World white balance (50% blend preserves true orange/black/white coats)
     ch_means = arr.mean(axis=(0, 1))

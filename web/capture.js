@@ -183,6 +183,7 @@ export function capturePage(main, onSuccess, {saveLocal, draft, lookupOnly = fal
     async function autoDetectAndIdentify(version) {
         const feedback = $('#lookup-status');
         feedback.textContent = '正在自动检测画面中的猫猫…';
+        let noCatDetected = false;
         try {
             const det = await api('/detect', { photo });
             if (disposed || version !== revision) return;
@@ -193,11 +194,16 @@ export function capturePage(main, onSuccess, {saveLocal, draft, lookupOnly = fal
                 $('#mark-toggle').textContent = boxes.length ? '再框一只' : '框选同框猫';
                 $('#mark-help').textContent = `已自动框出 ${boxes.length} 只猫，可直接查重或手动调整。`;
                 $('#quality').textContent = targets().map((box, i) => `猫 ${i + 1} · ${qualityHints(frame, box).join(' ') || '画面初检通过，可对照脸部和侧身花纹。'}`).join('　');
+            } else if (det?.detector_enabled) {
+                noCatDetected = true;
+                $('#mark-help').textContent = '未在画面中检测到猫。如画面里确实有猫，请点「框选同框猫」手动框出。';
+                $('#results').innerHTML = `<hr class="divider"><section class="sheet"><div class="record-box empty"><span class="record-badge empty">未检测到猫咪</span><p>画面中未识别到猫（可能是人像、景物或猫体过小被遮挡），已跳过花色与档案匹配。如果图里确实有猫，请先手动框选再点「照片查查」。</p></div></section>`;
+                feedback.textContent = '';
             }
         } catch {
             // Fall back silently to full-frame / manual box
         }
-        if (!saveLocal && !disposed && version === revision) {
+        if (!noCatDetected && !saveLocal && !disposed && version === revision) {
             await identify();
         } else if (feedback.textContent.startsWith('正在自动检测')) {
             feedback.textContent = '';
