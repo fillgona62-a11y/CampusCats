@@ -313,7 +313,8 @@ class App:
             accounts.throttle(db, f"photo:{actor}", 180, 3600)
             if path == "/api/detect":
                 return detect_photo(read_json(env, 9 * 1024 * 1024))
-            return identify(db, read_json(env, 9 * 1024 * 1024), media_dir=self.media)
+            return identify(db, read_json(env, 9 * 1024 * 1024), media_dir=self.media,
+                            reviewer_uid=user["id"] if user else None)
         uid = require(user)
         is_photo = path == "/api/sightings"
         if is_photo:

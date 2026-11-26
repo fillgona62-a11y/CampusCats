@@ -20,6 +20,12 @@ CREATE TABLE IF NOT EXISTS throttle (
     expires INTEGER NOT NULL,
     hits INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS photo_reviews (
+    user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE,
+    digest TEXT NOT NULL,
+    expires INTEGER NOT NULL,
+    PRIMARY KEY(user_id,digest)
+);
 CREATE TABLE IF NOT EXISTS cats (
     id INTEGER PRIMARY KEY,
     name TEXT NOT NULL,

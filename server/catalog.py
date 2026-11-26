@@ -6,6 +6,8 @@ import sqlite3
 import threading
 import time
 from collections import Counter, OrderedDict, defaultdict
+from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -34,6 +36,7 @@ NEUTERED_VALUES = ("unknown", "neutered", "intact")
 CARE_VALUES = ("school", "attention", "adopted", "memorial")
 _REF_CACHE_LOCK = threading.Lock()
 _REF_CACHE = OrderedDict()
+_EXTRA_LOOKUP_WORKERS = threading.BoundedSemaphore(2)
 
 
 def connect(path):
@@ -174,17 +177,19 @@ def references(db):
                 _REF_CACHE.move_to_end(cache_key)
                 return list(cached)
     rows = db.execute("""
-        SELECT id,cat_id,analysis,box,image,day FROM (
-            SELECT s.id,s.cat_id,s.analysis,s.box,f.image,date(f.observed_at,'+8 hours') AS day,
-                   ROW_NUMBER() OVER(PARTITION BY s.cat_id ORDER BY s.id DESC) AS n
+        WITH reviewed AS (
+            SELECT s.id,s.cat_id,s.analysis,s.crop,s.box,f.image,date(f.observed_at,'+8 hours') AS day,
+                   ROW_NUMBER() OVER(PARTITION BY s.cat_id,date(f.observed_at,'+8 hours') ORDER BY s.id DESC) AS within_day
             FROM sightings s JOIN frames f ON f.id=s.frame_id
             LEFT JOIN auto_identity a ON a.sighting_id=s.id
             WHERE s.status='confirmed' AND a.sighting_id IS NULL
             AND json_extract(s.analysis,'$.usable')=1 AND json_extract(s.analysis,'$.version')=?
-        ) WHERE n<=12
+        ) SELECT id,cat_id,analysis,crop,box,image,day FROM (
+            SELECT reviewed.*, ROW_NUMBER() OVER(PARTITION BY cat_id ORDER BY within_day,id DESC) AS n FROM reviewed
+        ) WHERE n<=12 ORDER BY cat_id,n
     """, (MODEL_VERSION,))
     parsed = [(r["cat_id"], dict(json.loads(r["analysis"]), _reference_id=r["id"],
-                                 frame=r["image"], box=tuple(json.loads(r["box"])), day=r["day"])) for r in rows]
+                                 crop_file=r["crop"], frame=r["image"], box=tuple(json.loads(r["box"])), day=r["day"])) for r in rows]
     if cache_key is not None:
         with _REF_CACHE_LOCK:
             _REF_CACHE[cache_key] = tuple(parsed)
@@ -219,26 +224,55 @@ def breed_hint(candidates):
 
 
 def _load_candidate_crops(candidates, refs, media_dir):
-    if media_dir is None:
-        return []
     from PIL import Image
-    ref_by_id = {ref.get("_reference_id"): ref for _, ref in refs if ref.get("_reference_id") is not None}
+
+    def read_crop(ref):
+        if ref.get("crop_file"):
+            try:
+                with Image.open(Path(media_dir) / ref["crop_file"]) as saved:
+                    saved.thumbnail((256, 256), Image.Resampling.LANCZOS)
+                    return saved.convert("RGB")
+            except OSError:
+                return None
+        try:
+            with Image.open(Path(media_dir) / ref["frame"]) as image:
+                crop = image.crop(pixel_box(image, ref["box"]))
+                crop.thumbnail((256, 256), Image.Resampling.LANCZOS)
+                return crop.convert("RGB")
+        except (KeyError, OSError, TypeError, ValueError):
+            return None
+
+    by_cat = defaultdict(list)
+    for cat_id, ref in refs:
+        by_cat[cat_id].append(ref)
     items = []
-    for cand in candidates[:3]:
-        ref = ref_by_id.get(cand.get("reference_id"))
-        crop_img = None
-        if ref and ref.get("frame") and ref.get("box"):
-            ref_path = Path(media_dir) / ref["frame"]
-            if ref_path.is_file():
-                try:
-                    with Image.open(ref_path) as im:
-                        crop_img = im.crop(pixel_box(im, ref["box"])).convert("RGB")
-                except OSError:
-                    crop_img = None
-        items.append(dict(cand, crop=crop_img))
+    primary_refs = []
+    for candidate in candidates:
+        pool = by_cat[candidate["id"]]
+        ordered = sorted(pool, key=lambda r: r.get("_reference_id") != candidate["reference_id"])
+        for ref in ordered:
+            crop = read_crop(ref)
+            if crop is None:
+                continue
+            ref_id = ref["_reference_id"]
+            items.append(dict(candidate, crop=crop, reference_id=ref_id,
+                              photo_url=f"/media/crop/{ref_id}.jpg", thumbnail_url=f"/media/thumb/{ref_id}.jpg"))
+            primary_refs.append(ref)
+            break
+
+    # An extra view fills a spare tile; it never displaces another identity.
+    spare = 5 - len(items)
+    for item, first in zip(items, primary_refs):
+        if not spare:
+            break
+        others = (r for r in by_cat[item["id"]] if r.get("frame") != first.get("frame"))
+        for ref in sorted(others, key=lambda r: r.get("day") == first.get("day")):
+            alternate = read_crop(ref)
+            if alternate is not None:
+                item["alternate"] = alternate
+                spare -= 1
+                break
     return items
-
-
 
 
 def _coat_conflict(query_coat, cand_coat):
@@ -273,26 +307,77 @@ def detect_photo(body):
     }
 
 
-def identify(db, body, media_dir=None):
-    boxes = validate_boxes(body.get("boxes"))
+def _identify_boxes(boxes, identify_one, cloud_ready):
+    if len(boxes) < 2 or not cloud_ready or not _EXTRA_LOOKUP_WORKERS.acquire(blocking=False):
+        return [identify_one(box) for box in boxes]
+    try:
+        results = []
+        with ThreadPoolExecutor(max_workers=1) as worker:
+            for index in range(0, len(boxes), 2):
+                second = None
+                if index + 1 < len(boxes):
+                    second = worker.submit(copy_context().run, identify_one, boxes[index + 1])
+                results.append(identify_one(boxes[index]))
+                if second is not None:
+                    results.append(second.result())
+        return results
+    finally:
+        _EXTRA_LOOKUP_WORKERS.release()
+
+
+def _review_digest(photo, boxes):
+    coordinates = [[float(v) for v in box] for box in boxes]
+    return hashlib.sha256(json.dumps([photo, coordinates], separators=(",", ":")).encode()).hexdigest()
+
+
+def identify(db, body, media_dir=None, *, reviewer_uid=None):
+    mode = body.get("box_mode", "manual")
+    boxes = validate_boxes(body.get("boxes")) if mode == "manual" else []
+    if mode not in ("manual", "auto", "cloud_review"):
+        raise Problem("未知的识别方式。")
     area = area_field(body, "area", 80) if body.get("area") is not None else ""
     _, image = canonical_photo(body.get("photo"))
+    deadline = time.monotonic() + 45
+    allow_remote = body.get("cloud_photo") is True
+    cloud_vlm_ready = allow_remote and ai_vision.has_cloud_vlm()
+    frame_info = None
+    detected_boxes = None
+    if mode == "cloud_review":
+        if not cloud_vlm_ready:
+            raise Problem("云端复核暂不可用，可以手动框选后再查。", 503)
+        scene = ai_vision.review_scene(image, timeout=15)
+        if not scene or scene.get("uncertain") or not isinstance(scene.get("boxes"), list):
+            raise Problem("云端未能确认照片中的猫，可以手动框选。", 422)
+        if not scene["boxes"]:
+            return {"results": [], "detected_boxes": [], "box_source": mode}
+        try:
+            boxes = validate_boxes(scene["boxes"])
+        except Problem:
+            raise Problem("云端未能准确框出目标，可以手动框选。", 422) from None
+        detected_boxes = boxes
+    elif mode == "auto":
+        scan = detector.inspect_image_subjects(image)
+        detected_boxes = [item["box"] for item in scan["cats"][:8]]
+        if not detected_boxes and (detector.is_enabled() or clip_classifier.is_enabled()):
+            return {"results": [], "detected_boxes": [], "box_source": mode,
+                    "non_cat_type": scan["non_cat_type"]}
+        boxes = detected_boxes or [[0, 0, 1, 1]]
+    elif detector.is_enabled():
+        frame_info = detector._run_full_frame_scan(image)
+    if detected_boxes:
+        frame_info = {"cats": [{"box": box} for box in detected_boxes]}
     db.execute("BEGIN")
     cats = catalog(db)
     refs = references(db)
     db.commit()
-    deadline = time.monotonic() + 45
     reference_count = len({r[0] for r in refs})
-    allow_remote = body.get("cloud_photo") is True
-    cloud_vlm_ready = allow_remote and ai_vision.has_cloud_vlm()
-    frame_info = detector._run_full_frame_scan(image) if detector.is_enabled() else None
-    results = []
-    for box in boxes:
+
+    def identify_one(box):
         gate = detector.verify_box_is_cat(
             image, box, frame_info=frame_info, cloud_vlm_active=cloud_vlm_ready
         )
         if not gate["is_cat"]:
-            results.append({
+            return {
                 "box": box,
                 "quality": [gate["reason"]],
                 "warnings": [gate["reason"]],
@@ -307,10 +392,9 @@ def identify(db, body, media_dir=None):
                 ),
                 "ai_profile": None,
                 "vlm_compare": None,
-            })
-            continue
+            }
 
-        # === 第一关（纯本地快速辅助初筛）：仅提取个体特征向量 + SIFT 局部重排，缩成 Top-3 候选 ===
+        # === 第一关（纯本地快速辅助初筛）：仅提取个体特征向量 + SIFT 局部重排，召回相似的已审核档案 ===
         analysis = analyze_crop(image, box)
         crop = image.crop(pixel_box(image, box)).convert("RGB")
         candidates = matched_profiles(analysis, refs, cats, limit=5, area=area)
@@ -336,23 +420,27 @@ def identify(db, body, media_dir=None):
 
         if analysis["usable"] and candidates and media_dir is not None:
             candidates = face_match.rerank_with_local_features(crop, candidates, refs, media_dir)
-            candidates = [c for c in candidates if float(c.get("distance", 0.0)) <= DEFAULT_MAX_DISTANCE]
-        candidates = candidates[:3]
+            if not cloud_vlm_ready:
+                candidates = [c for c in candidates if float(c.get("distance", 0.0)) <= DEFAULT_MAX_DISTANCE]
+        candidates = candidates[:5 if cloud_vlm_ready else 3]
 
         # === 第二关（云端精准拍板，权重最高，每只猫最多仅 1 次云端请求）===
-        # 有候选时：只发一张拼好的 [NEW | #1 | #2 | #3] 对比图，一次完成「同猫拍板 + 新猫品种毛色剪耳描述」；
+        # 有候选时：只发一张带编号的对比图，一次完成「同猫拍板 + 新猫品种毛色剪耳描述」；
         # 无候选（新猫/空库）时：单独发 NEW 裁剪图识别毛色、品种与剪耳特征。
         remaining = deadline - time.monotonic()
         vlm_compare = None
         if analysis["usable"] and allow_remote and remaining >= 2:
-            if candidates and media_dir is not None:
-                cand_crops = _load_candidate_crops(candidates, refs, media_dir)
+            cand_crops = _load_candidate_crops(candidates, refs, media_dir) if candidates and media_dir is not None and cloud_vlm_ready else []
+            if cloud_vlm_ready and media_dir is not None and not cand_crops:
+                candidates = []
+            if cand_crops:
+                candidates = [{k: v for k, v in item.items() if k not in ("crop", "alternate")} for item in cand_crops]
                 vlm_compare = ai_vision.compare_candidates_vlm(
-                    crop, cand_crops, allow_remote=True, timeout=min(30, max(5, remaining - 1))
+                    crop, cand_crops, allow_remote=True, timeout=min(30, max(1, remaining - 1))
                 )
                 if vlm_compare and vlm_compare.get("is_cat") is False:
                     reason = vlm_compare.get("reason") or "视觉模型复核判定该画面并非猫咪，已拦截档案匹配。"
-                    results.append({
+                    return {
                         "box": box,
                         "quality": [reason],
                         "warnings": [reason],
@@ -367,8 +455,7 @@ def identify(db, body, media_dir=None):
                         ),
                         "ai_profile": None,
                         "vlm_compare": None,
-                    })
-                    continue
+                    }
                 if vlm_compare and vlm_compare.get("ai_profile"):
                     ai_profile = vlm_compare["ai_profile"]
                 if vlm_compare and vlm_compare.get("verdict") == "same_cat":
@@ -382,11 +469,11 @@ def identify(db, body, media_dir=None):
                     candidates = []
             else:
                 remote_profile = ai_vision.classify_cat_crop(
-                    crop, allow_remote=True, timeout=min(28, max(5, remaining - 1)), precomputed_clip=gate.get("clip_analysis")
+                    crop, allow_remote=True, timeout=min(28, max(1, remaining - 1)), precomputed_clip=gate.get("clip_analysis")
                 )
                 if remote_profile and remote_profile.get("is_cat") is False:
                     reason = remote_profile.get("summary") or "视觉模型识别该画面并非猫咪，已拦截档案匹配。"
-                    results.append({
+                    return {
                         "box": box,
                         "quality": [reason],
                         "warnings": [reason],
@@ -401,8 +488,7 @@ def identify(db, body, media_dir=None):
                         ),
                         "ai_profile": None,
                         "vlm_compare": None,
-                    })
-                    continue
+                    }
                 if remote_profile:
                     ai_profile = remote_profile
 
@@ -415,7 +501,10 @@ def identify(db, body, media_dir=None):
         record_status = assess_db_match(
             candidates, reference_count, area=area, usable=analysis["usable"], vlm_compare=vlm_compare
         )
-        results.append({
+        if cloud_vlm_ready and candidates and not vlm_compare and analysis["usable"]:
+            record_status.update(status="ambiguous", top_cat_id=None, top_cat_name="", area_matched=False,
+                                 summary="云端未完成身份比对，可以先查看候选参考照。")
+        return {
             "box": box,
             "quality": analysis["warnings"],
             "warnings": analysis["warnings"],
@@ -426,8 +515,21 @@ def identify(db, body, media_dir=None):
             "record_status": record_status,
             "ai_profile": ai_profile,
             "vlm_compare": vlm_compare,
-        })
-    return {"results": results, "reference_count": reference_count}
+        }
+    results = _identify_boxes(boxes, identify_one, cloud_vlm_ready)
+    response = {"results": results, "reference_count": reference_count}
+    if mode == "cloud_review" and reviewer_uid and body.get("for_sighting") is True and all(
+        r["usable"] and not r["not_cat"] for r in results
+    ):
+        now = int(time.time())
+        db.execute("DELETE FROM photo_reviews WHERE expires<=?", (now,))
+        db.execute("INSERT OR REPLACE INTO photo_reviews(user_id,digest,expires) VALUES(?,?,?)",
+                   (reviewer_uid, _review_digest(body["photo"], boxes), now + 3600))
+        db.commit()
+        response["reviewed_for_sighting"] = True
+    if detected_boxes is not None:
+        response.update(detected_boxes=detected_boxes, box_source=mode)
+    return response
 
 
 def serialize(db, rows, *, private=False):
@@ -514,6 +616,12 @@ def upload(db, media_dir, uid, body):
 
     frame_id = previous()
     if frame_id is None:
+        reviewed = body.get("reviewed_photo") is True and db.execute(
+            "SELECT 1 FROM photo_reviews WHERE user_id=? AND digest=? AND expires>?",
+            (uid, _review_digest(body.get("photo"), boxes), int(time.time())),
+        ).fetchone()
+        if reviewed:
+            automatic = False
         for cat_id in selected:
             one(db, "SELECT 1 FROM sightings WHERE cat_id=? AND status='confirmed'", cat_id)
         ref_revision = revision(db) if automatic else None
@@ -524,7 +632,7 @@ def upload(db, media_dir, uid, body):
                 reference_days[cat_id].add(ref["day"])
         if not any(len(days) >= 2 for days in reference_days.values()):
             refs = []
-        if detector.is_enabled() or clip_classifier.is_enabled():
+        if not reviewed and (detector.is_enabled() or clip_classifier.is_enabled()):
             _, check_img = canonical_photo(body.get("photo"))
             for box in boxes:
                 gate = detector.verify_box_is_cat(check_img, box)

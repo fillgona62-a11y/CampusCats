@@ -324,8 +324,6 @@ def assess_db_match(
         return dict(result, status="poor_quality", summary="照片的辨认特征不足，请补拍清晰的脸部或侧身。")
     if not reference_count:
         return dict(result, status="no_reference", summary="图鉴尚无可用于比对的参考照。")
-    if not nearest:
-        return dict(result, status="no_candidate", summary="目前没有找到外观足够接近的参考照，可能是尚未建档的新猫。")
 
     # If VLM pairwise verification gave a clear verdict, surface it concisely
     if isinstance(vlm_compare, dict) and vlm_compare.get("source") == "vlm":
@@ -349,6 +347,11 @@ def assess_db_match(
                 summary=f"视觉复核认为与候选猫存在差异：{reason}" if reason else "视觉复核认为可能不是库内候选猫，建议提交目击建档。",
             )
 
+        return dict(result, recorded=None, top_cat_id=None, top_cat_name="", area_matched=False,
+                    status="ambiguous", summary="云端未能确认同一只猫，候选参考照可供人工核对。")
+
+    if not nearest:
+        return dict(result, status="no_candidate", summary="目前没有找到外观足够接近的参考照，可能是尚未建档的新猫。")
     if len(candidates) > 1 and candidates[1]["distance"] - nearest["distance"] < 0.025:
         return dict(result, status="ambiguous", summary="有多只外观接近的候选，请对照脸部、四肢和尾巴的花纹。")
     if nearest.get("local_inliers", 0) >= 18:

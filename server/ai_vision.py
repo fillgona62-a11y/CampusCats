@@ -286,37 +286,66 @@ def classify_cat_crop(crop, *, allow_remote=False, timeout=None, precomputed_cli
     return _heuristic_profile(crop)
 
 
+def review_scene(image, timeout):
+    """Only used when the photographer explicitly requests a second look."""
+    cfg = llm_config()
+    if not cfg["enabled"] or not cfg["vision_model"]:
+        return None
+    prompt = ("请找出照片中真实的家猫，区分狗、人、玩具和背景。"
+              "用 JSON 返回 boxes，每只可辨认的猫一个框，最多八只。"
+              "每个框是归一化的 [左边,上边,宽,高]，尽量包含整只猫。"
+              "确定没有猫时返回空数组。看不清时返回 uncertain 为 true。")
+    payload = {"model": cfg["vision_model"], "messages": [{"role": "user", "content": [
+        {"type": "text", "text": prompt},
+        {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + _encode_jpeg_b64(image, 1024)}},
+    ]}]}
+    cfg = dict(cfg, timeout=min(cfg["timeout"], timeout))
+    try:
+        raw = providers.completion(cfg, payload) if cfg.get("scope") else _environment_completion(cfg, payload)
+        text = raw["choices"][0]["message"]["content"]
+        if isinstance(text, list):
+            text = "".join(x.get("text", "") for x in text if isinstance(x, dict))
+        return _extract_json(text)
+    except (OSError, ValueError, KeyError, IndexError, TypeError, AttributeError):
+        return None
+
+
 def _make_comparison_sheet(query_crop, candidate_items):
-    """Build a crisp horizontal comparison sheet: [Query | Cand 1 | Cand 2 | Cand 3]."""
-    from PIL import Image, ImageDraw, ImageOps
+    """Keep the complete crop and label multiple views with the same identity."""
+    from PIL import ImageDraw, ImageOps
 
     panels = [("NEW", query_crop)]
-    for idx, item in enumerate(candidate_items[:3], 1):
+    for idx, item in enumerate(candidate_items, 1):
         if item.get("crop") is not None:
             panels.append((f"#{idx}", item["crop"]))
+        if item.get("alternate") is not None:
+            panels.append((f"#{idx} B", item["alternate"]))
     if len(panels) < 2:
         return None
 
     tile = 256
     header = 26
     gap = 6
-    width = len(panels) * tile + (len(panels) + 1) * gap
-    height = tile + header + gap * 2
+    columns = min(3, len(panels))
+    rows = (len(panels) + columns - 1) // columns
+    width = columns * (tile + gap) + gap
+    height = rows * (tile + header + gap) + gap
     sheet = Image.new("RGB", (width, height), (245, 245, 240))
     draw = ImageDraw.Draw(sheet)
     for i, (label, im) in enumerate(panels):
-        x = gap + i * (tile + gap)
-        y = gap + header
-        fitted = ImageOps.fit(im.convert("RGB"), (tile, tile), method=Image.Resampling.LANCZOS)
-        sheet.paste(fitted, (x, y))
+        x = gap + (i % columns) * (tile + gap)
+        top = gap + (i // columns) * (tile + header + gap)
+        y = top + header
+        fitted = ImageOps.contain(im.convert("RGB"), (tile, tile), method=Image.Resampling.LANCZOS)
+        sheet.paste(fitted, (x + (tile - fitted.width) // 2, y + (tile - fitted.height) // 2))
         bg = (217, 130, 43) if i == 0 else (45, 68, 56)
-        draw.rectangle([x, gap, x + tile, gap + header - 2], fill=bg)
-        draw.text((x + 8, gap + 6), label, fill=(255, 255, 255))
+        draw.rectangle([x, top, x + tile, top + header - 2], fill=bg)
+        draw.text((x + 8, top + 6), label, fill=(255, 255, 255))
     return sheet
 
 
 def compare_candidates_vlm(query_crop, candidate_items, *, allow_remote=False, timeout=None):
-    """Single-sheet Stage 2 VLM call: inspects [NEW | #1 | #2 | #3] once to decide both identity match AND NEW's coat/breed/ear-clip."""
+    """Compare the query against all pictured identities in one provider request."""
     if not allow_remote or not candidate_items:
         return None
     cfg = llm_config()
@@ -326,13 +355,10 @@ def compare_candidates_vlm(query_crop, candidate_items, *, allow_remote=False, t
     if sheet is None:
         return None
     b64 = _encode_jpeg_b64(sheet, max_side=1024)
-    cand_lines = []
-    for idx, item in enumerate(candidate_items[:3], 1):
-        cand_lines.append(f"#{idx}: {item.get('name', '未命名')}（{item.get('coat') or '花色待补'}，常出没：{item.get('area') or '未知'}）")
     prompt = (
-        "你是一位校园流浪猫个体辨认专家。上图最左侧橙色标题「NEW」是刚拍到的待识别画面，右侧「#1」「#2」「#3」是本地初筛出的最像候选猫参考照：\n"
-        + "\n".join(cand_lines)
-        + "\n注意：本地模型仅做了粗筛，你是本次识别的最终拍板者。请只看这一张拼好的对比图，一次性给出权威结论："
+        f"NEW 是待辨认照片，其余编号 1 到 {len(candidate_items)} 为不同猫的已审核目击。"
+        "相同编号的 B 图是同一候选的另一次目击。只比较可见外观。证据不足选 uncertain；"
+        "候选都不符可选 different_cat。品种无法判断时填写未知。"
         "\n1）身份拍板：逐项对比额头纹/M纹走向、鼻梁与嘴周白斑边界、耳朵是否剪耳/缺口、胸腹四肢花纹；校园里同花色异猫很常见，局部斑纹不一致请果断判为 different_cat（若 NEW 根本不是猫则设 is_cat 为 false）。"
         "\n2）NEW 自身特征描述：权威判断 NEW 的最可能品种、毛色毛长、是否可见绝育剪耳标记及显著外观特征。"
         "\n严格输出 JSON，不要包含任何额外解释：\n"
@@ -340,7 +366,7 @@ def compare_candidates_vlm(query_crop, candidate_items, *, allow_remote=False, t
         '  "is_cat": true 或 false,\n'
         '  "non_cat_type": "person | dog | other | null",\n'
         '  "verdict": "same_cat | different_cat | uncertain",\n'
-        '  "best_candidate_index": 1 或 2 或 3 或 null,\n'
+        '  "best_candidate_index": 图中候选编号或 null,\n'
         '  "confidence": 0.0 到 1.0 之间的小数,\n'
         '  "matching_features": ["最多3条一致的局部花纹特征"],\n'
         '  "differences": ["最多3条观察到的差异或不确定点"],\n'
@@ -398,8 +424,10 @@ def compare_candidates_vlm(query_crop, candidate_items, *, allow_remote=False, t
             idx = int(idx) if idx is not None else None
         except (TypeError, ValueError):
             idx = None
-        if idx is not None and not (1 <= idx <= len(candidate_items[:3])):
+        if idx is not None and not (1 <= idx <= len(candidate_items)):
             idx = None
+        if verdict == "same_cat" and idx is None:
+            verdict = "uncertain"
         try:
             conf = max(0.0, min(1.0, float(parsed.get("confidence", 0.5))))
         except (TypeError, ValueError):

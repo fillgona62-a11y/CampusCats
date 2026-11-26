@@ -123,6 +123,7 @@ def status_info():
         "mode": "llm" if cfg["enabled"] else "local_fallback",
         "chat_model": chat_model if cfg["enabled"] else None,
         "scope": cfg.get("scope", "shared"),
+        "photo_box_modes": True,
         "vision_mode": vision_mode,
         "vision_model": cfg["vision_model"] if cfg["enabled"] and cfg["vision_model"] else None,
         "onnx_encoder": bool(encoder.VERSION),

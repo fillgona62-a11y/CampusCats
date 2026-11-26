@@ -53,7 +53,7 @@ export function status(value) {
     return `<span class="pill ${esc(value)}">${({ pending: '待辨认', confirmed: '身份已确认', rejected: '未采纳' })[value] || '待处理'}</span>`;
 }
 export async function api(path, body) {
-    const idempotent = body === undefined || path === '/detect' || path === '/identify';
+    const idempotent = body === undefined || path === '/detect' || (path === '/identify' && !body?.cloud_photo);
     const maxAttempts = idempotent ? 2 : 1;
     let response;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {

@@ -66,7 +66,7 @@ function recordBadge(rs) {
     const map = {
         not_a_cat: ['danger', '非猫咪画面'],
         poor_quality: ['empty', '请补拍清晰照片'],
-        ambiguous: ['possible', '多个相似候选'],
+        ambiguous: ['possible', '身份待核对'],
         weak_candidate: ['weak', '外观弱相似 · 注意区分异猫'],
         possible_match: ['possible', '疑似已在库'],
         no_candidate: ['empty', '暂未找到相似档案'],
@@ -78,7 +78,7 @@ function recordBadge(rs) {
 function aiProfileCard(ai) {
     if (!ai) return '';
     const sourceTag = ai.source === 'vlm'
-        ? '云端视觉模型拍板'
+        ? '云端外观分析'
         : ai.source === 'local_assist'
             ? '本地毛色辅助（不作最终品种判定）'
             : ai.source === 'local_clip'
@@ -97,6 +97,7 @@ export function capturePage(main, onSuccess, {saveLocal, draft, lookupOnly = fal
         saveLocal ? '可将照片存为本机草稿，也可以点「照片查查」联网比对。' : '拍一张清楚的照片，先看看校园图鉴里有没有它。';
     main.innerHTML = `<div class="narrow">${head(title, description)}
     <section class="surface"><h2>拍摄或选取照片</h2><p>尽量让脸部或侧身花纹入镜。同框时，可以在照片上把每只猫分别框出来。</p>
+    <label class="hint" id="cloud-option" hidden><input type="checkbox" id="use-cloud"> 用云端辨认猫，发送本次取景和已审核参考照</label>
     <div class="actions"><button type="button" class="btn" id="live-start">${icon('camera')}打开相机</button><button type="button" class="btn light" id="choose">${icon('image')}从相册选取</button></div>
     <input id="file" type="file" accept="image/*" hidden><input id="native" type="file" accept="image/*" capture="environment" hidden>
     <div id="live-panel" hidden><hr class="divider"><video class="live" id="viewfinder" autoplay muted playsinline></video><p id="live-quality" class="advice" role="status"></p><div class="actions"><button id="shutter" class="btn">拍下并查一查</button><button id="live-stop" class="btn light">关闭相机</button></div></div>
@@ -105,7 +106,7 @@ export function capturePage(main, onSuccess, {saveLocal, draft, lookupOnly = fal
     <div class="mark-tools"><button type="button" class="btn light" id="mark-toggle" aria-pressed="false" aria-controls="stage">框选同框猫</button><button type="button" class="btn ghost" id="undo" hidden>撤销上一框</button></div>
     <p id="mark-help" class="hint" aria-live="polite"></p>
     <div class="capture-stage"><div class="target-stage" id="stage" aria-describedby="mark-help"><img id="preview" alt="本次目击照片" draggable="false"><div class="mark-layer" id="marks"></div></div></div>
-    <div class="advice" id="quality" role="status"></div><label class="hint" id="cloud-option" hidden><input name="cloud_photo" type="checkbox"> 启用第二关云端精准拍板（只将拼好的候选对比图发给视觉模型判定同猫、毛色与剪耳）</label><button type="button" class="btn light" id="identify">${icon('search')}照片查查 · 查重与花色识别</button>
+    <div class="advice" id="quality" role="status"></div><button type="button" class="btn light" id="identify">${icon('search')}照片查查 · 查重与花色识别</button>
     <p id="lookup-status" role="status" class="hint"></p><div id="results" aria-live="polite"></div><div id="record-fields" ${lookupOnly ? 'hidden inert' : ''}><hr class="divider"><h2>保存这次目击</h2><label class="field"><span>校园区域</span><input name="area" list="capture-areas" required maxlength="60" placeholder="例如，图书馆（琴园环路）或 兵器博物馆 / 兵器广场"><small>优先选择已有区域名称，方便归入同一地点统计。</small></label><div class="actions" style="margin:-4px 0 10px"><button type="button" class="btn ghost" id="locate-btn">${icon('pin')}定位当前位置</button><span id="geo-status" class="hint" style="margin:0">拍照或选图时会询问位置权限以关联猫猫出现地点。</span></div><datalist id="capture-areas"></datalist>
     <label class="field"><span>目击时间</span><input type="datetime-local" name="observed" required></label>
     <label class="field"><span>观察备注（选填）</span><textarea name="note" maxlength="800" rows="2" placeholder="例如，左前腿有一处橘色斑纹"></textarea></label><label class="hint"><input type="checkbox" name="automatic" checked> 允许自动关联已建档的猫</label><p class="hint">脸部特征充分吻合时自动记录重遇，其余目击待辨认。</p><p class="form-error" role="alert"></p><button type="submit" class="btn">${icon('book')}提交目击</button></div></form></div>`;
@@ -118,7 +119,9 @@ export function capturePage(main, onSuccess, {saveLocal, draft, lookupOnly = fal
         if (!draft?.area) form.elements.area.value = prefillArea;
     }
     let stream = null, monitor = null, disposed = false, photo = '', frame = null, boxes = [], suggestions = [], start = null, requestId = newRequestId(), revision = 0, acquire = 0, fileVersion = 0;
-    let gps = null, areaManuallyEdited = false, hasCloudVision = false;
+    let gps = null, areaManuallyEdited = false, hasCloudVision = false, supportsBoxModes = false;
+    let pendingDecision = null, awaitingReview = false, nextMode = 'manual';
+    let reviewedForSighting = false, cloudDecisions = null;
     async function requestLocation(force = false) {
         if (lookupOnly || disposed) return;
         const geoEl = $('#geo-status');
@@ -185,6 +188,11 @@ export function capturePage(main, onSuccess, {saveLocal, draft, lookupOnly = fal
     }
     function update() {
         revision++;
+        pendingDecision = null;
+        reviewedForSighting = false;
+        cloudDecisions = null;
+        awaitingReview = false;
+        nextMode = 'manual';
         requestId = newRequestId();
         suggestions = [];
         $('#results').replaceChildren();
@@ -196,6 +204,11 @@ export function capturePage(main, onSuccess, {saveLocal, draft, lookupOnly = fal
         $('#quality').textContent = targets().map((box, i) => `猫 ${i + 1} · ${qualityHints(frame, box).join(' ') || '画面初检通过，可对照脸部和侧身花纹。'}`).join('　');
     }
     async function autoDetectAndIdentify(version) {
+        if (saveLocal && !navigator.onLine) return;
+        if (supportsBoxModes && !saveLocal) {
+            await identify('auto');
+            return;
+        }
         const feedback = $('#lookup-status');
         feedback.textContent = '正在自动检测画面中的猫猫…';
         let noCatDetected = false;
@@ -235,7 +248,6 @@ export function capturePage(main, onSuccess, {saveLocal, draft, lookupOnly = fal
         }
     }
     function useFrame(next) {
-        form.elements.cloud_photo.checked = hasCloudVision;
         frame = next;
         photo = frame.toDataURL('image/jpeg', .86);
         boxes = [];
@@ -253,11 +265,12 @@ export function capturePage(main, onSuccess, {saveLocal, draft, lookupOnly = fal
     }
     function vlmCompareCard(vc) {
         if (!vc || vc.source !== 'vlm') return '';
-        const labelMap = { same_cat: '视觉复核 · 高度疑似同一只', different_cat: '视觉复核 · 存在明显差异', uncertain: '视觉复核 · 建议人工再核对' };
-        const tone = vc.verdict === 'same_cat' ? 'ok' : vc.verdict === 'different_cat' ? 'warn' : 'muted';
+        const labelMap = { same_cat: '视觉复核 · 疑似同一只', different_cat: '视觉复核 · 存在明显差异', uncertain: '视觉复核 · 建议人工再核对' };
+        const verdict = vc.confidence >= 0.55 ? vc.verdict : 'uncertain';
+        const tone = verdict === 'same_cat' ? 'ok' : verdict === 'different_cat' ? 'warn' : 'muted';
         const matchList = (vc.matching_features || []).length ? `<p class="meta">一致特征：${vc.matching_features.map(esc).join('、')}</p>` : '';
         const diffList = (vc.differences || []).length ? `<p class="meta">差异/待核对：${vc.differences.map(esc).join('、')}</p>` : '';
-        return `<div class="surface" style="margin:10px 0;padding:12px 14px"><p><strong class="pill ${tone}">${labelMap[vc.verdict] || '视觉复核'}</strong></p>${vc.reason ? `<p style="margin-top:6px">${esc(vc.reason)}</p>` : ''}${matchList}${diffList}</div>`;
+        return `<div class="surface" style="margin:10px 0;padding:12px 14px"><p><strong class="pill ${tone}">${labelMap[verdict] || '视觉复核'}</strong></p>${vc.reason ? `<p style="margin-top:6px">${esc(vc.reason)}</p>` : ''}${matchList}${diffList}</div>`;
     }
     function previewResults(data) {
         suggestions = Array(data.results.length).fill(null);
@@ -282,12 +295,13 @@ export function capturePage(main, onSuccess, {saveLocal, draft, lookupOnly = fal
         $('#results').querySelectorAll('[data-clear]').forEach(b => b.onclick = () => {
             const i = Number(b.dataset.clear);
             suggestions[i] = null;
+            form.elements.automatic.checked = false;
             requestId = newRequestId();
             $(`#selection-${i}`).textContent = '提交意向 · 待辨认';
         });
         $('#results').querySelectorAll('[data-ask-agent]').forEach(b => b.onclick = () => {
             const i = Number(b.dataset.askAgent), r = data.results[i];
-            const top = r.candidates?.[0];
+            const top = r.record_status?.status === 'possible_match' ? r.candidates?.[0] : null;
             const parts = [];
             if (top) parts.push(`刚查图最像「${top.name}」`);
             if (r.ai_profile?.coat) parts.push(`花色初判为${r.ai_profile.coat}`);
@@ -296,25 +310,86 @@ export function capturePage(main, onSuccess, {saveLocal, draft, lookupOnly = fal
             window.dispatchEvent(new CustomEvent('campuscats:ask-agent', { detail: { prompt } }));
         });
     }
-    async function identify() {
+    function showNoBoxes(result, mode) {
+        awaitingReview = true;
+        const label = result.non_cat_type === 'dog' ? '初筛看到的是狗。' :
+            result.non_cat_type === 'person' ? '初筛看到的是人。' : '初筛没有框出猫。';
+        $('#quality').textContent = mode === 'cloud_review' ? '云端也没有找到清晰的猫。' : label;
+        $('#mark-help').textContent = '照片里确实有猫时，可以直接框出它的位置。';
+        $('#results').replaceChildren();
+        const submit = form.querySelector('[type=submit]');
+        if (submit && !saveLocal) submit.disabled = true;
+        if (hasCloudVision && mode !== 'cloud_review') {
+            const review = document.createElement('button');
+            review.type = 'button';
+            review.className = 'btn light';
+            review.textContent = '发送整张照片，让云端再看一次';
+            review.onclick = () => identify('cloud_review');
+            $('#results').append(review);
+        }
+    }
+    async function identify(mode = 'manual') {
+        if (!frame || pendingDecision === revision) return;
         const version = revision;
+        pendingDecision = version;
+        nextMode = mode;
         const area = form.elements.area.value.trim();
-        const idPhoto = resizedDataUrl(frame, 1024, 0.82) || photo;
-        const payload = { photo: idPhoto, boxes: targets(), area, cloud_photo: form.elements.cloud_photo.checked };
+        const forSighting = mode === 'cloud_review' && !lookupOnly && !saveLocal;
+        const idPhoto = forSighting ? photo : resizedDataUrl(frame, 1024, 0.82) || photo;
+        const payload = { photo: idPhoto, boxes: targets(), area, cloud_photo: mode === 'cloud_review' || $('#use-cloud').checked };
+        if (mode !== 'manual') payload.box_mode = mode;
+        if (forSighting) payload.for_sighting = true;
         const feedback = $('#lookup-status');
         const trigger = $('#identify');
         trigger.disabled = true;
-        feedback.textContent = '正在比对校园图鉴…';
+        const submit = form.querySelector('[type=submit]');
+        let blockSubmission = awaitingReview || submit.disabled;
+        if (!saveLocal) submit.disabled = true;
+        const review = $('#results button');
+        if (awaitingReview && review) review.disabled = true;
+        feedback.textContent = mode === 'cloud_review' ? '正在用整张照片复核…' : '正在查找猫和相似档案…';
+        const slow = setTimeout(() => {
+            if (!disposed && version === revision)
+                feedback.textContent = lookupOnly ? '仍在辨认，多只猫可能需要更久。' : '仍在辨认，可以继续填写目击信息。';
+        }, 3500);
         try {
             const result = await api('/identify', payload);
             if (disposed || version !== revision) return;
+            if (Array.isArray(result.detected_boxes)) {
+                boxes = result.detected_boxes;
+                draw();
+                setDrawing(false);
+                if (!boxes.length && !result.results?.length) {
+                    blockSubmission = true;
+                    showNoBoxes(result, mode);
+                    feedback.textContent = '';
+                    return;
+                }
+                if (boxes.length) {
+                    $('#mark-help').textContent = `已框出 ${boxes.length} 只猫，可以手动调整。`;
+                    $('#quality').textContent = boxes.map((box, i) => `猫 ${i + 1} · ${qualityHints(frame, box).join(' ') || '画面清晰'}`).join('　');
+                }
+            }
             if (!result?.results?.length) throw new Error('未取得识别结果，请再查一次。');
+            awaitingReview = false;
+            reviewedForSighting = result.reviewed_for_sighting === true || reviewedForSighting;
+            cloudDecisions = payload.cloud_photo ? result.results.map(r =>
+                r.vlm_compare?.verdict === 'same_cat' && r.record_status?.status === 'possible_match'
+                    ? r.record_status.top_cat_id : null) : null;
+            nextMode = 'manual';
+            blockSubmission = result.results.some(r => r.not_cat);
             previewResults(result);
             feedback.textContent = '';
         } catch (error) {
             if (!disposed && version === revision) feedback.textContent = error.message;
         } finally {
-            if (!disposed && version === revision) trigger.disabled = false;
+            clearTimeout(slow);
+            if (!disposed && version === revision) {
+                pendingDecision = null;
+                trigger.disabled = awaitingReview;
+                if (!saveLocal) submit.disabled = blockSubmission;
+                if (review) review.disabled = false;
+            }
         }
     }
     if (saveLocal) {
@@ -325,9 +400,13 @@ export function capturePage(main, onSuccess, {saveLocal, draft, lookupOnly = fal
     }
     api('/agent/status').then(status => {
         if (!disposed) {
+            supportsBoxModes = status.photo_box_modes === true;
             hasCloudVision = status.vision_mode === 'vlm';
             $('#cloud-option').hidden = !hasCloudVision;
-            if (hasCloudVision) form.elements.cloud_photo.checked = true;
+            if (hasCloudVision) {
+                try { $('#use-cloud').checked = sessionStorage.getItem('campuscats:cloud-photo') !== 'off'; }
+                catch { $('#use-cloud').checked = true; }
+            }
         }
     }).catch(() => {});
     if (!lookupOnly) {
@@ -337,7 +416,11 @@ export function capturePage(main, onSuccess, {saveLocal, draft, lookupOnly = fal
             }
         }).catch(() => {});
     }
-    $('#identify').onclick = identify;
+    $('#use-cloud').onchange = () => {
+        try { sessionStorage.setItem('campuscats:cloud-photo', $('#use-cloud').checked ? 'on' : 'off'); }
+        catch { /* The choice still applies on this page. */ }
+    };
+    $('#identify').onclick = () => identify(nextMode);
     $('#locate-btn')?.addEventListener('click', () => requestLocation(true));
     form.elements.area?.addEventListener('input', () => { areaManuallyEdited = true; });
     const point = e => {
@@ -473,9 +556,15 @@ export function capturePage(main, onSuccess, {saveLocal, draft, lookupOnly = fal
             const payload = {
                 photo, boxes: targets(), area: form.elements.area.value.trim(), note: form.elements.note.value.trim(), request_id: requestId, observed_at: observed.toISOString(),
                 suggested_cat_ids: targets().map((_, i) => suggestions[i] ?? null),
-                automatic: form.elements.automatic.checked,
+                automatic: form.elements.automatic.checked && !reviewedForSighting,
                 ...(gps ? { latitude: gps.latitude, longitude: gps.longitude, location_accuracy: gps.location_accuracy } : {})
             };
+            if (reviewedForSighting) payload.reviewed_photo = true;
+            if (cloudDecisions && payload.automatic) {
+                payload.automatic = cloudDecisions.every((id, i) => id && (!suggestions[i] || suggestions[i] === id))
+                    && new Set(cloudDecisions).size === cloudDecisions.length;
+                if (payload.automatic) payload.suggested_cat_ids = cloudDecisions;
+            }
             const result = saveLocal ? await saveLocal(payload) : await api('/sightings', payload);
             if (!disposed)
                 onSuccess(result);
