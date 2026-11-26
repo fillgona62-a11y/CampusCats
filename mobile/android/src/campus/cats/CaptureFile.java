@@ -38,9 +38,9 @@ public final class CaptureFile extends ContentProvider {
         String name = uri.getLastPathSegment();
         if (!AUTH.equals(uri.getAuthority()) || name == null || uri.getPathSegments().size() != 1)
             throw new IllegalArgumentException("Invalid file");
-        if (name.matches("cat-[0-9A-Za-z_-]+\.jpg"))
+        if (name.matches("cat-[0-9A-Za-z_-]+\\.jpg"))
             return new File(folder(getContext()), name);
-        if (name.matches("update-[0-9A-Za-z_-]+\.apk"))
+        if (name.matches("update-[0-9A-Za-z_-]+\\.apk"))
             return new File(updatesFolder(getContext()), name);
         throw new IllegalArgumentException("Invalid file");
     }
