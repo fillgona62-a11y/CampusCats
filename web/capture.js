@@ -1,5 +1,5 @@
 import { api, btn, busy, esc, head, icon, img, notice } from './ui.js';
-import { nearestSyluLandmark, reverseGeocodeAmap } from './campus-map.js';
+import { locateAccurate, nearestSyluLandmark, reverseGeocodeAmap } from './campus-map.js';
 const maximumSide = 1600;
 const fullBox = [0, 0, 1, 1];
 const canvas = (w, h) => Object.assign(document.createElement('canvas'), { width: w, height: h });
@@ -104,41 +104,37 @@ export function capturePage(main, onSuccess, {saveLocal, draft, lookupOnly = fal
     }
     let stream = null, monitor = null, disposed = false, photo = '', frame = null, boxes = [], suggestions = [], start = null, requestId = newRequestId(), revision = 0, acquire = 0, fileVersion = 0;
     let gps = null, areaManuallyEdited = false, hasCloudVision = false;
-    function requestLocation(force = false) {
+    async function requestLocation(force = false) {
         if (lookupOnly || disposed) return;
         const geoEl = $('#geo-status');
-        if (!navigator.geolocation) {
-            if (geoEl) geoEl.textContent = '当前浏览器不支持定位，请手动选择校园区域。';
-            return;
-        }
         if (gps && !force) return;
-        if (geoEl) geoEl.textContent = '正在请求位置权限并定位…';
-        navigator.geolocation.getCurrentPosition(async pos => {
+        if (geoEl) geoEl.textContent = '正在高精度定位…';
+        try {
+            const loc = await locateAccurate({ timeout: 10000 });
             if (disposed) return;
-            const lat = Number(pos.coords.latitude.toFixed(6));
-            const lng = Number(pos.coords.longitude.toFixed(6));
-            const acc = Math.round(pos.coords.accuracy || 0);
-            gps = { latitude: lat, longitude: lng, location_accuracy: acc };
-            const amapAddr = await reverseGeocodeAmap(lat, lng).catch(() => null);
+            const acc = loc.accuracy || 0;
+            gps = { latitude: loc.wgsLat, longitude: loc.wgsLng, location_accuracy: acc };
+            const amapAddr = loc.address || await reverseGeocodeAmap(loc.gcjLat, loc.gcjLng, true).catch(() => null);
             if (disposed) return;
-            const lm = nearestSyluLandmark(lat, lng);
+            const lm = nearestSyluLandmark(loc.gcjLat, loc.gcjLng, true);
             const bestName = amapAddr || lm?.name || '';
             if (bestName && !areaManuallyEdited && (!form.elements.area.value.trim() || force)) {
                 form.elements.area.value = bestName;
             }
             if (geoEl) {
+                const accTxt = acc ? `（误差约 ${acc}m）` : '';
                 geoEl.textContent = amapAddr
-                    ? `高德精确定位：${amapAddr}（精度 ${acc}m）`
+                    ? `高德精准定位：${amapAddr}${accTxt}`
                     : lm
-                        ? `已关联位置：${lm.name}（约 ${lm.distanceMeters}m，精度 ${acc}m）`
-                        : `已记录坐标：${lat.toFixed(4)}, ${lng.toFixed(4)}（精度 ${acc}m），请补充区域名`;
+                        ? `已关联位置：${lm.name}（约 ${lm.distanceMeters}m${acc ? `，误差 ${acc}m` : ''}）`
+                        : `已记录坐标：${loc.wgsLat.toFixed(4)}, ${loc.wgsLng.toFixed(4)}${accTxt}，请补充区域名`;
             }
-        }, err => {
+        } catch (err) {
             if (disposed || !geoEl) return;
             geoEl.textContent = err?.code === 1
                 ? '未授予位置权限，请手动选择校园区域。'
-                : '定位超时或信号弱，请手动选择校园区域。';
-        }, { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 });
+                : '定位超时或信号弱，请到开阔处重试或手动选择校园区域。';
+        }
     }
     let drawing = false, pointerId = null;
     const targets = () => boxes.length ? boxes : [fullBox];

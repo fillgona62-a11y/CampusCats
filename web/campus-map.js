@@ -99,15 +99,16 @@ function matchLandmark(areaText) {
     return null;
 }
 
-export function nearestSyluLandmark(lat, lng) {
+export function nearestSyluLandmark(lat, lng, isGcj = false) {
     if (typeof lat !== 'number' || typeof lng !== 'number' || !Number.isFinite(lat) || !Number.isFinite(lng))
         return null;
+    const [refLng, refLat] = isGcj ? [lng, lat] : wgs84ToGcj02(lat, lng);
     const toRad = d => d * Math.PI / 180;
     let best = null, bestDist = Infinity;
     for (const lm of SYLU_LANDMARKS) {
         if (typeof lm.lat !== 'number' || typeof lm.lng !== 'number') continue;
-        const dLat = toRad(lm.lat - lat), dLng = toRad(lm.lng - lng);
-        const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat)) * Math.cos(toRad(lm.lat)) * Math.sin(dLng / 2) ** 2;
+        const dLat = toRad(lm.lat - refLat), dLng = toRad(lm.lng - refLng);
+        const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(refLat)) * Math.cos(toRad(lm.lat)) * Math.sin(dLng / 2) ** 2;
         const dist = 6371000 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
         if (dist < bestDist) { bestDist = dist; best = lm; }
     }
@@ -143,6 +144,12 @@ export function wgs84ToGcj02(lat, lng) {
     return [Number((lng + dLng).toFixed(6)), Number((lat + dLat).toFixed(6))];
 }
 
+export function gcj02ToWgs84(lat, lng) {
+    if (lng < 72.004 || lng > 137.8347 || lat < 0.8293 || lat > 55.8271) return [lng, lat];
+    const [mLng, mLat] = wgs84ToGcj02(lat, lng);
+    return [Number((lng * 2 - mLng).toFixed(6)), Number((lat * 2 - mLat).toFixed(6))];
+}
+
 let _amapPromise = null;
 async function loadAmap() {
     if (window.AMap) return window.AMap;
@@ -163,7 +170,7 @@ async function loadAmap() {
             s.dataset.amapSdk = '1';
             // Always send origin Referer so AMap domain whitelist succeeds under HTTPS
             s.referrerPolicy = 'origin';
-            s.src = `https://webapi.amap.com/maps?v=2.0&key=${encodeURIComponent(cfg.amap_key)}&plugin=AMap.Geocoder,AMap.Scale`;
+            s.src = `https://webapi.amap.com/maps?v=2.0&key=${encodeURIComponent(cfg.amap_key)}&plugin=AMap.Geocoder,AMap.Scale,AMap.Geolocation`;
             s.async = true;
             s.onload = resolve;
             s.onerror = () => {
@@ -183,10 +190,10 @@ async function loadAmap() {
     return _amapPromise;
 }
 
-export async function reverseGeocodeAmap(lat, lng) {
+export async function reverseGeocodeAmap(lat, lng, isGcj = false) {
     const AMap = await loadAmap().catch(() => null);
     if (!AMap || !AMap.Geocoder) return null;
-    const [gLng, gLat] = wgs84ToGcj02(lat, lng);
+    const [gLng, gLat] = isGcj ? [lng, lat] : wgs84ToGcj02(lat, lng);
     return new Promise(resolve => {
         try {
             const geocoder = new AMap.Geocoder({ radius: 120, extensions: 'all' });
@@ -205,6 +212,112 @@ export async function reverseGeocodeAmap(lat, lng) {
         } catch {
             resolve(null);
         }
+    });
+}
+
+function formatAmapAddress(result) {
+    const ac = result?.addressComponent;
+    const poi = result?.pois?.[0]?.name || ac?.building || ac?.neighborhood;
+    const aoi = result?.aois?.[0]?.name;
+    const raw = (result?.formattedAddress || '').replace(/^辽宁省沈阳市浑南区/, '');
+    const text = poi ? (aoi && !poi.includes(aoi) ? `${aoi} · ${poi}` : poi) : raw;
+    return text ? text.slice(0, 56) : null;
+}
+
+/**
+ * 精准融合定位：优先调用高德 AMap.Geolocation（高精度 + 自动坐标转换 + 拒绝陈旧缓存），
+ * 离线或插件失败时回退浏览器 watchPosition 短时收敛，挑选误差最小的一帧。
+ */
+export async function locateAccurate({ timeout = 10000 } = {}) {
+    const AMap = await loadAmap().catch(() => null);
+    if (AMap && AMap.Geolocation) {
+        const amapFix = await new Promise(resolve => {
+            try {
+                const geo = new AMap.Geolocation({
+                    enableHighAccuracy: true,
+                    timeout: Math.min(timeout, 9000),
+                    maximumAge: 0,
+                    convert: true,
+                    needAddress: true,
+                    GeoLocationFirst: true,
+                    noIpLocate: 1,
+                });
+                geo.getCurrentPosition((status, result) => {
+                    if (status === 'complete' && result?.position) {
+                        const gcjLng = Number(result.position.lng.toFixed(6));
+                        const gcjLat = Number(result.position.lat.toFixed(6));
+                        const [wgsLng, wgsLat] = gcj02ToWgs84(gcjLat, gcjLng);
+                        resolve({
+                            gcjLng,
+                            gcjLat,
+                            wgsLng,
+                            wgsLat,
+                            accuracy: Math.round(result.accuracy || 0),
+                            address: formatAmapAddress(result),
+                            source: 'amap',
+                        });
+                    } else {
+                        resolve(null);
+                    }
+                });
+            } catch {
+                resolve(null);
+            }
+        });
+        if (amapFix) return amapFix;
+    }
+
+    if (!navigator.geolocation) {
+        const err = new Error('当前浏览器不支持定位。');
+        err.code = 0;
+        throw err;
+    }
+    return new Promise((resolve, reject) => {
+        let best = null;
+        let done = false;
+        let watchId = null;
+        const finish = (ok, val) => {
+            if (done) return;
+            done = true;
+            if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+            clearTimeout(timer);
+            if (ok) {
+                const wgsLat = Number(val.coords.latitude.toFixed(6));
+                const wgsLng = Number(val.coords.longitude.toFixed(6));
+                const [gcjLng, gcjLat] = wgs84ToGcj02(wgsLat, wgsLng);
+                resolve({
+                    gcjLng,
+                    gcjLat,
+                    wgsLng,
+                    wgsLat,
+                    accuracy: Math.round(val.coords.accuracy || 0),
+                    address: null,
+                    source: 'browser',
+                });
+            } else {
+                reject(val);
+            }
+        };
+        const timer = setTimeout(() => {
+            if (best) finish(true, best);
+            else finish(false, Object.assign(new Error('定位超时或信号较弱'), { code: 3 }));
+        }, Math.min(timeout, 8000));
+
+        watchId = navigator.geolocation.watchPosition(
+            pos => {
+                if (!best || (pos.coords.accuracy || 9999) < (best.coords.accuracy || 9999)) {
+                    best = pos;
+                }
+                if ((pos.coords.accuracy || 9999) <= 35) {
+                    finish(true, best);
+                }
+            },
+            err => {
+                if (best) finish(true, best);
+                else finish(false, err);
+            },
+            { enableHighAccuracy: true, maximumAge: 0, timeout: Math.min(timeout, 8000) }
+        );
     });
 }
 
@@ -282,10 +395,9 @@ export async function campusMapPage(main, cats, onPickArea, isCurrent = () => tr
         ? `已加载 ${sightings.length} 条带精确 GPS 的目击记录与 ${SYLU_LANDMARKS.length} 个沈理地标，点击标点查看猫咪详情。`
         : `已加载 ${SYLU_LANDMARKS.length} 个沈理校内地标；拍照授权定位后，每次目击将自动以精确坐标落点在实景地图上。`;
 
-    const centerGcj = wgs84ToGcj02(41.727829, 123.493886);
     const map = new AMap.Map('amap-container', {
         zoom: window.innerWidth <= 520 ? 15.5 : 16.3,
-        center: centerGcj,
+        center: [123.493886, 41.727829],
         viewMode: '2D',
     });
     if (AMap.Scale) map.addControl(new AMap.Scale());
@@ -319,7 +431,7 @@ export async function campusMapPage(main, cats, onPickArea, isCurrent = () => tr
         if (landmarkOverlays.length) { map.remove(landmarkOverlays); landmarkOverlays = []; }
         if (!showLandmarks) return;
         for (const lm of SYLU_LANDMARKS) {
-            const [gLng, gLat] = wgs84ToGcj02(lm.lat, lm.lng);
+            const [gLng, gLat] = [lm.lng, lm.lat];
             const count = (byLandmark[lm.id] || []).length;
             const bg = count > 0 ? '#163f37' : '#526a60';
             const badge = count > 0 ? `<span style="background:#d9822b;color:#fff;border-radius:999px;padding:0 5px;margin-left:4px;font-size:11px">${count}</span>` : '';
@@ -400,24 +512,35 @@ export async function campusMapPage(main, cats, onPickArea, isCurrent = () => tr
     renderPins('');
     filterEl.onchange = e => renderPins(e.target.value);
 
-    let meMarker = null;
-    main.querySelector('#amap-locate').onclick = () => {
-        if (!navigator.geolocation) {
-            notice('当前浏览器不支持定位。');
-            return;
+    let meOverlays = [];
+    main.querySelector('#amap-locate').onclick = async () => {
+        notice('正在高精度定位…');
+        try {
+            const loc = await locateAccurate({ timeout: 10000 });
+            if (!isCurrent()) return;
+            const pos = [loc.gcjLng, loc.gcjLat];
+            map.setZoomAndCenter(loc.accuracy && loc.accuracy <= 60 ? 17.5 : 16.5, pos);
+            if (meOverlays.length) { map.remove(meOverlays); meOverlays = []; }
+            if (loc.accuracy && loc.accuracy > 5) {
+                meOverlays.push(new AMap.Circle({
+                    center: pos,
+                    radius: Math.min(loc.accuracy, 400),
+                    strokeColor: '#2563eb',
+                    strokeOpacity: 0.45,
+                    strokeWeight: 1.5,
+                    fillColor: '#3b82f6',
+                    fillOpacity: 0.14,
+                }));
+            }
+            meOverlays.push(new AMap.CircleMarker({
+                center: pos, radius: 8, strokeColor: '#fff', strokeWeight: 2.5, fillColor: '#2563eb', fillOpacity: 0.95, zIndex: 150,
+            }));
+            map.add(meOverlays);
+            const accMsg = loc.accuracy ? `（误差约 ${loc.accuracy}m）` : '';
+            notice(loc.accuracy > 150 ? `已定位${accMsg}，室内信号偏弱可到窗边或室外重试。` : `已精准定位${accMsg}`);
+        } catch (err) {
+            notice(err?.code === 1 ? '未授予位置权限，请在系统设置中开启定位。' : '定位超时或信号较弱，请到开阔处重试。');
         }
-        notice('正在定位当前位置…');
-        navigator.geolocation.getCurrentPosition(pos => {
-            const [gLng, gLat] = wgs84ToGcj02(pos.coords.latitude, pos.coords.longitude);
-            map.setZoomAndCenter(17.5, [gLng, gLat]);
-            if (meMarker) map.remove(meMarker);
-            meMarker = new AMap.CircleMarker({
-                center: [gLng, gLat], radius: 8, strokeColor: '#fff', strokeWeight: 2, fillColor: '#2563eb', fillOpacity: 0.9,
-            });
-            map.add(meMarker);
-        }, err => {
-            notice(err?.code === 1 ? '未授予位置权限，请在系统设置中开启定位。' : '定位超时或信号较弱，请稍后重试。');
-        }, { enableHighAccuracy: true, timeout: 8000 });
     };
 
     return () => {

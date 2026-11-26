@@ -2421,3 +2421,30 @@ main#content {
     transition-duration:.01ms !important;
   }
 }
+
+/* In-app Android self-update banner */
+.app-update-bar {
+  background:var(--ginger-soft);
+  border-bottom:1px solid var(--line);
+  padding:10px 0;
+  animation:cc-fade-up .18s ease;
+}
+.app-update-inner {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  flex-wrap:wrap;
+  gap:10px;
+  font-size:13.5px;
+  color:var(--ink);
+}
+.app-update-actions {
+  display:flex;
+  align-items:center;
+  gap:8px;
+}
+.app-update-actions .btn {
+  min-height:34px;
+  padding:5px 12px;
+  font-size:13px;
+}

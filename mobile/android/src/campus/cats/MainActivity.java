@@ -31,6 +31,8 @@ public final class MainActivity extends Activity {
     private ValueCallback<Uri[]> chooser;
     private File exportFile;
     private boolean systemCamera;
+    private volatile long hotOfflineUntil = 0L;
+    private volatile boolean updatingApk = false;
 
     private Uri defaultOrigin() {
         return Uri.parse(getString(getResources().getIdentifier("campus_origin", "string", getPackageName())));
@@ -129,7 +131,8 @@ public final class MainActivity extends Activity {
             else if (name.endsWith(".webmanifest")) mime = "application/manifest+json";
             else return missing();
             try {
-                WebResourceResponse res = new WebResourceResponse(mime, mime.startsWith("image/") ? null : "UTF-8", getAssets().open(name));
+                InputStream stream = openWebResource(name);
+                WebResourceResponse res = new WebResourceResponse(mime, mime.startsWith("image/") ? null : "UTF-8", stream);
                 if (name.equals("index.html")) {
                     java.util.Map<String, String> hdrs = new java.util.HashMap<>();
                     hdrs.put("Referrer-Policy", "strict-origin-when-cross-origin");
@@ -140,6 +143,125 @@ public final class MainActivity extends Activity {
                 return res;
             } catch (IOException ex) { return missing(); }
         }
+    }
+
+    private InputStream openWebResource(String name) throws IOException {
+        if ("android-files.js".equals(name)) {
+            return getAssets().open(name);
+        }
+        File hotDir = new File(getCacheDir(), "web_hot");
+        File cached = new File(hotDir, name);
+        if (System.currentTimeMillis() >= hotOfflineUntil) {
+            java.net.HttpURLConnection conn = null;
+            try {
+                java.net.URL url = new java.net.URL(origin.toString() + "/" + name);
+                conn = (java.net.HttpURLConnection) url.openConnection();
+                conn.setConnectTimeout(2500);
+                conn.setReadTimeout(4000);
+                conn.setUseCaches(false);
+                conn.setRequestProperty("Cache-Control", "no-cache");
+                if (conn.getResponseCode() == 200) {
+                    ByteArrayOutputStream out = new ByteArrayOutputStream();
+                    try (InputStream in = conn.getInputStream()) {
+                        byte[] buf = new byte[16384];
+                        int n;
+                        while ((n = in.read(buf)) != -1) out.write(buf, 0, n);
+                    }
+                    byte[] data = out.toByteArray();
+                    if ("index.html".equals(name)) {
+                        String html = new String(data, "UTF-8");
+                        if (!html.contains("android-files.js")) {
+                            html = html.replace("</head>", "<script type=\"module\" src=\"/android-files.js\"></script></head>");
+                            data = html.getBytes("UTF-8");
+                        }
+                    }
+                    if (data.length > 0) {
+                        File parent = cached.getParentFile();
+                        if (parent != null && (parent.isDirectory() || parent.mkdirs())) {
+                            File tmp = new File(parent, cached.getName() + ".tmp");
+                            try (FileOutputStream fos = new FileOutputStream(tmp)) { fos.write(data); }
+                            tmp.renameTo(cached);
+                        }
+                        return new ByteArrayInputStream(data);
+                    }
+                }
+            } catch (IOException ignored) {
+                hotOfflineUntil = System.currentTimeMillis() + 30000L;
+            } finally {
+                if (conn != null) conn.disconnect();
+            }
+        }
+        if (cached.isFile() && cached.length() > 0) {
+            return new FileInputStream(cached);
+        }
+        return getAssets().open(name);
+    }
+
+    private String appInfoJson() {
+        try {
+            android.content.pm.PackageInfo info = getPackageManager().getPackageInfo(getPackageName(), 0);
+            long code = android.os.Build.VERSION.SDK_INT >= 28 ? info.getLongVersionCode() : info.versionCode;
+            String ver = info.versionName == null ? "0.0.0" : info.versionName.replace("\"", "");
+            return "{\"versionCode\":" + code + ",\"versionName\":\"" + ver + "\"}";
+        } catch (Exception ex) {
+            return "{\"versionCode\":0,\"versionName\":\"0.0.0\"}";
+        }
+    }
+
+    private void startApkUpdate(String rawUrl) {
+        if (updatingApk) {
+            Toast.makeText(this, "正在下载更新包，请稍候…", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        Uri target;
+        if (rawUrl != null && rawUrl.startsWith("/")) {
+            target = Uri.parse(origin.toString() + rawUrl);
+        } else {
+            target = rawUrl == null ? null : Uri.parse(rawUrl);
+        }
+        if (target == null || !trusted(target) || target.getEncodedPath() == null || !target.getEncodedPath().endsWith(".apk")) {
+            Toast.makeText(this, "更新地址无效。", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        updatingApk = true;
+        Toast.makeText(this, "正在下载新版本安装包…", Toast.LENGTH_SHORT).show();
+        final String downloadUrl = target.toString();
+        new Thread(() -> {
+            java.net.HttpURLConnection conn = null;
+            try {
+                File apk = CaptureFile.createUpdateApk(MainActivity.this);
+                conn = (java.net.HttpURLConnection) new java.net.URL(downloadUrl).openConnection();
+                conn.setConnectTimeout(10000);
+                conn.setReadTimeout(30000);
+                conn.setInstanceFollowRedirects(true);
+                if (conn.getResponseCode() != 200) throw new IOException("HTTP " + conn.getResponseCode());
+                try (InputStream in = conn.getInputStream(); FileOutputStream out = new FileOutputStream(apk)) {
+                    byte[] buf = new byte[16384];
+                    int n;
+                    while ((n = in.read(buf)) != -1) out.write(buf, 0, n);
+                }
+                if (apk.length() < 50000L) throw new IOException("APK incomplete");
+                Uri contentUri = CaptureFile.uriForUpdate(apk);
+                runOnUiThread(() -> {
+                    updatingApk = false;
+                    Intent install = new Intent(Intent.ACTION_VIEW);
+                    install.setDataAndType(contentUri, "application/vnd.android.package-archive");
+                    install.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+                    try {
+                        startActivity(install);
+                    } catch (ActivityNotFoundException ex) {
+                        Toast.makeText(MainActivity.this, "无法调起系统安装器。", Toast.LENGTH_LONG).show();
+                    }
+                });
+            } catch (Exception ex) {
+                runOnUiThread(() -> {
+                    updatingApk = false;
+                    Toast.makeText(MainActivity.this, "下载更新失败，请稍后重试。", Toast.LENGTH_LONG).show();
+                });
+            } finally {
+                if (conn != null) conn.disconnect();
+            }
+        }).start();
     }
     private class Chrome extends WebChromeClient {
         @Override public void onPermissionRequest(PermissionRequest req) {
@@ -188,6 +310,15 @@ public final class MainActivity extends Activity {
                 origin = defaultOrigin();
                 result.confirm(origin.toString());
                 web.loadUrl(origin + ENTRY);
+                return true;
+            }
+            if ("campuscats-app:info".equals(message)) {
+                result.confirm(appInfoJson());
+                return true;
+            }
+            if ("campuscats-app:update".equals(message)) {
+                result.confirm("ok");
+                startApkUpdate(payload);
                 return true;
             }
             if (!message.startsWith("campuscats-save:")) return super.onJsPrompt(view,url,message,payload,result);

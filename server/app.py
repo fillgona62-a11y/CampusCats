@@ -225,6 +225,23 @@ class App:
             return surveys.board(db, user["id"] if user else None)
         if path == "/api/areas":
             return known_areas(db)
+        if path == "/api/app/version":
+            v_code, v_name = 9, "0.6.2"
+            manifest = HERE.parent / "mobile" / "android" / "AndroidManifest.xml"
+            if manifest.is_file():
+                m_txt = manifest.read_text(encoding="utf-8")
+                mc = re.search(r'android:versionCode="(\d+)"', m_txt)
+                mn = re.search(r'android:versionName="([^"]+)"', m_txt)
+                if mc:
+                    v_code = int(mc.group(1))
+                if mn:
+                    v_name = mn.group(1)
+            return {
+                "version_code": v_code,
+                "version_name": v_name,
+                "apk_url": "/downloads/CampusCats-Android.apk",
+                "notes": "升级高德精准融合定位与沈理地标校准，支持前端联网热更新与 App 内一键更新。",
+            }
         if path == "/api/map/config":
             return {
                 "amap_key": os.getenv("AMAP_JS_KEY", "").strip(),

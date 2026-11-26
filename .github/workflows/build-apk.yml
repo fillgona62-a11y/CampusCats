@@ -92,3 +92,19 @@ jobs:
         with:
           name: CampusCats-Android-APK
           path: dist/CampusCats-Android.apk
+
+      - name: Sync built APK to downloads/CampusCats-Android.apk
+        if: github.ref == 'refs/heads/main'
+        run: |
+          mkdir -p downloads
+          cp -f dist/CampusCats-Android.apk downloads/CampusCats-Android.apk
+          if git diff --quiet -- downloads/CampusCats-Android.apk; then
+            echo "APK unchanged, skipping commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add downloads/CampusCats-Android.apk
+          git commit -m "自动更新最新安卓安装包 CampusCats-Android.apk [skip ci]"
+          git pull --rebase origin main
+          git push origin HEAD:main

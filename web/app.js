@@ -11,6 +11,53 @@ const installedAndroid = location.pathname === '/_app/index.html';
 const main = document.getElementById('content');
 let serial = 0, clean = null, session = null, recoveryCode = '', lastFilter = '', filterArea = '', filterTag = '';
 
+let androidAppInfo = null;
+function getAndroidAppInfo() {
+    if (!installedAndroid) return null;
+    if (androidAppInfo) return androidAppInfo;
+    try {
+        const raw = window.prompt('campuscats-app:info', '');
+        if (raw) androidAppInfo = JSON.parse(raw);
+    } catch {}
+    return androidAppInfo;
+}
+
+async function checkAppUpdate(manual = false) {
+    if (!installedAndroid) return;
+    const local = getAndroidAppInfo();
+    try {
+        const remote = await api('/app/version');
+        if (!remote || !remote.version_code) return;
+        const hasNew = !local || Number(remote.version_code) > Number(local.versionCode || 0);
+        if (hasNew) {
+            let bar = document.getElementById('app-update-bar');
+            if (!bar) {
+                bar = document.createElement('div');
+                bar.id = 'app-update-bar';
+                bar.className = 'app-update-bar';
+                document.querySelector('.mast')?.after(bar);
+            }
+            bar.innerHTML = `<div class="shell app-update-inner"><span>发现客户端新版本 <strong>v${esc(remote.version_name)}</strong>${remote.notes ? ' · ' + esc(remote.notes) : ''}</span><div class="app-update-actions"><button type="button" class="btn" id="app-update-go">立即更新</button><button type="button" class="btn ghost" id="app-update-dismiss" aria-label="稍后再说">稍后</button></div></div>`;
+            bar.querySelector('#app-update-go').onclick = () => {
+                window.prompt('campuscats-app:update', remote.apk_url || '/downloads/CampusCats-Android.apk');
+            };
+            bar.querySelector('#app-update-dismiss').onclick = () => bar.remove();
+            if (manual) notice(`发现新版本 v${remote.version_name}，点击顶部横幅立即安装。`);
+        } else if (manual) {
+            notice(`当前已是最新版客户端（v${local.versionName}）。`);
+        }
+    } catch {
+        if (manual) notice('检查更新失败，请检查网络连接。');
+    }
+}
+
+function androidUpdateBox() {
+    if (!installedAndroid) return '';
+    const info = getAndroidAppInfo();
+    const verText = info?.versionName ? `当前客户端版本：v${esc(info.versionName)}（界面已支持联网自动热更新）` : '界面已支持联网自动热更新';
+    return `<details class="surface"><summary>客户端版本与自助更新</summary><p class="hint">${verText}</p><div class="actions"><button type="button" class="btn light" data-check-update>检查客户端更新</button></div></details>`;
+}
+
 function androidOriginBox() {
     if (!installedAndroid) return '';
     return `<details class="surface"><summary>切换校园站点地址</summary><form class="android-origin-form"><p>默认连接预设校园服务器。学校更换域名时可在此填入新的 HTTPS 地址。</p><label class="field"><span>站点 HTTPS 地址</span><input name="origin" type="url" placeholder="https://cats.school.edu.cn" value="${esc(location.origin)}"></label><div class="actions"><button type="submit" class="btn light">保存并重连</button><button type="button" class="btn ghost" data-origin-reset>恢复默认地址</button></div></form></details>`;
@@ -18,6 +65,9 @@ function androidOriginBox() {
 
 function bindAndroidOrigin(container) {
     if (!installedAndroid) return;
+    container.querySelectorAll('[data-check-update]').forEach(btnEl => {
+        btnEl.onclick = () => busy(btnEl, () => checkAppUpdate(true));
+    });
     container.querySelectorAll('.android-origin-form').forEach(form => {
         form.onsubmit = e => {
             e.preventDefault();
@@ -275,6 +325,7 @@ function me(data) {
  ${btn('#surveys', '继续定点观察或查看周报', 'pin', 'light')}
  <div class="section-head"><h2>重遇卡片</h2></div>${reunions.length ? reunions.map((r, i) => `<article class="recap"><h2>${esc(r.cat_name)} <span>相隔 ${Number(r.days)} 天</span></h2><div class="compare">${[[r.first_photo_url, r.first_at, '初次目击'], [r.last_photo_url, r.last_at, '最近目击']].map(([url, when, title]) => `<figure>${img(url, title, 'loading="lazy"')}<figcaption>${title} · ${esc(date(when))}</figcaption></figure>`).join('')}</div><button type="button" class="btn light" data-export="${i}">生成可保存卡片</button><div class="export-result"></div></article>`).join('') : empty('time', '下一次相遇，会留下对照', '再次记录同一只猫并确认身份后，就能在这里看到两次目击的照片。')}
  <div class="section-head"><h2>我的目击</h2><span>${sightings.length} 条</span></div><div class="stack">${sightings.length ? sightings.map(entry).join('') : empty('camera', '还没有目击记录', '在校园偶遇一只猫时，拍下一张照片。', btn('#capture', '记录目击', 'camera'))}</div>
+ ${androidUpdateBox()}
  ${androidOriginBox()}
  <details class="surface"><summary>猫猫助手与模型设置</summary><p class="hint">可在此配置你的个人 AI 接口${user.role === 'reviewer' ? '或全校共用的模型服务' : ''}，未设置时默认使用校园图鉴助手。</p><div class="actions">${btn('#agent-settings', '配置 AI 助手接口', 'focus', 'light')}</div></details>
  <details class="surface"><summary>账号管理</summary><form id="delete-account"><p>注销后将撤回你的目击、照片及由此产生的公开记录。请确认需要注销，再输入当前密码。</p><label class="field"><span>当前密码</span><input name="password" type="password" required autocomplete="current-password"></label><p class="form-error"></p><button class="btn light" type="submit">确认注销账号</button></form></details></div>`;
@@ -439,3 +490,4 @@ if (!installedAndroid && 'serviceWorker' in navigator && isSecureContext)
     navigator.serviceWorker.register('/sw.js').catch(() => { });
 const resetAgent = initAgentWidget();
 route();
+if (installedAndroid) checkAppUpdate(false);
