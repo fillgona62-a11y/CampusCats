@@ -12,6 +12,7 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 
 from vision import analyze_crop, pixel_box
 from face_match import face_features
+import ai_vision
 
 
 class Problem(Exception):
@@ -99,6 +100,8 @@ def prepare(photo, boxes, *, verify=False):
         media[media_name(crop)] = crop
         media[media_name(thumb)] = thumb
         analysis = analyze_crop(image, box)
+        if analysis["usable"]:
+            analysis["coat_hint"] = ai_vision._heuristic_profile(target)["coat"]
         landmarks = face_features(target) if verify and analysis["usable"] else None
         crops.append((box, media_name(crop), media_name(thumb), analysis, landmarks))
     return media_name(frame), crops, media

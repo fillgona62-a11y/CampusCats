@@ -12,7 +12,7 @@ StateDirectory=campuscats
 EnvironmentFile=/etc/campuscats.env
 Environment=PYTHONDONTWRITEBYTECODE=1
 # Single-worker multi-threaded mode keeps in-process ref cache, LLM semaphore, and optional ONNX model memory shared on 4GB hosts.
-ExecStart=/srv/campuscats/.venv/bin/gunicorn --chdir server --workers 1 --threads 8 --timeout 90 --bind ${CAMPUS_BIND} app:create_app()
+ExecStart=/srv/campuscats/.venv/bin/gunicorn --chdir server --workers 1 --threads 8 --keep-alive 5 --timeout 90 --bind ${CAMPUS_BIND} app:create_app()
 Restart=on-failure
 NoNewPrivileges=yes
 UMask=0027

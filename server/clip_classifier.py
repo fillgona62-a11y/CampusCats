@@ -1,12 +1,11 @@
-"""Local zero-shot cat species gate, breed, and coat classifier via CLIP-ViT-B/32 INT8 ONNX.
+"""Local zero-shot cat species gate & coat assistant via CLIP-ViT-B/32 INT8 ONNX (v0.6.3).
 
-Runs 100% locally on CPU without PyTorch or external API keys:
+Strictly acts as Stage-1 assist (never asserts authoritative purebred types):
 - `clip-vision-q8.onnx` (~89 MB, CLIPVisionModelWithProjection INT8)
 - `clip-cat-prompts.npz` (~35 KB, precomputed text embeddings generated at install time)
 
-Provides:
-1. `inspect_species(crop)` — rejects humans, dogs, and non-animal scenes before catalog matching.
-2. `classify_breed_and_coat(crop)` — recognizes 16 cat breeds/types and 11 coat patterns offline.
+Provides single-pass `analyze_crop_once(crop)` so both species verification and coat hint
+share ONE ONNX forward call.
 """
 
 import os
@@ -24,6 +23,8 @@ SPECIES_PROMPTS = [
         "a photo of a cat",
         "a photo of a stray cat or kitten outdoors",
         "close-up photo of a domestic cat face, ears, whiskers, or fur",
+        "a fluffy black or dark brown domestic cat in dim light",
+        "a solid black longhaired cat with glowing eyes",
         "multiple cats or kittens sitting together",
     ]),
     ("person", [
@@ -109,7 +110,7 @@ COAT_PROMPTS = [
     ("蓝白 / 灰白", ["a blue-gray and white bicolor cat"]),
     ("重点色（挖煤脸）", ["a colorpoint cat with cream body and dark brown face, ears, and paws"]),
     ("纯白", ["a completely pure white cat"]),
-    ("纯黑", ["a completely solid black cat"]),
+    ("纯黑 / 深色", ["a completely solid black or very dark fluffy cat"]),
 ]
 
 
@@ -192,10 +193,8 @@ def _softmax(logits, np):
     return exps / (np.sum(exps) + 1e-9)
 
 
-def inspect_species(crop):
-    """Classify crop into cat / person / dog / other to block non-cat uploads."""
-    vec, bank = _encode_image(crop)
-    if vec is None or "species_vecs" not in bank:
+def _species_from_vec(vec, bank):
+    if vec is None or bank is None or "species_vecs" not in bank:
         return None
     import numpy as np
 
@@ -210,10 +209,10 @@ def inspect_species(crop):
     other_p = scores.get("other", 0.0)
     dominant = max(scores, key=scores.get)
     is_cat = bool(
-        cat_p >= 0.34
-        and cat_p >= person_p * 1.20
-        and cat_p >= dog_p * 1.15
-        and cat_p >= other_p * 0.80
+        cat_p >= 0.30
+        and cat_p >= person_p * 1.15
+        and cat_p >= dog_p * 1.08
+        and cat_p >= other_p * 0.75
     )
     return {
         "is_cat": is_cat,
@@ -225,64 +224,56 @@ def inspect_species(crop):
     }
 
 
-def classify_breed_and_coat(crop):
-    """Zero-shot local ONNX breed + coat classification."""
-    vec, bank = _encode_image(crop)
-    if vec is None or "breed_vecs" not in bank or "coat_vecs" not in bank:
+def _coat_from_vec(vec, bank):
+    if vec is None or bank is None or "coat_vecs" not in bank:
         return None
     import numpy as np
 
     scale = min(float(bank.get("logit_scale", 35.0)), 35.0)
-    breed_keys = [str(k) for k in bank["breed_keys"].tolist()]
-    breed_native = [bool(x) for x in bank["breed_native"].tolist()]
-    breed_mat = np.asarray(bank["breed_vecs"], dtype=np.float32)
-    breed_probs = _softmax((breed_mat @ vec) * scale, np)
-
-    top_idx = int(np.argmax(breed_probs))
-    top_breed = breed_keys[top_idx]
-    top_prob = float(breed_probs[top_idx])
-    is_native = breed_native[top_idx]
-
-    # Sum probability across all Chinese domestic /田园猫 sub-types
-    native_mass = float(sum(p for p, nat in zip(breed_probs, breed_native) if nat))
-
-    if top_prob >= 0.44 or (is_native and native_mass >= 0.62):
-        confidence = "high"
-    elif top_prob >= 0.25 or (is_native and native_mass >= 0.45):
-        confidence = "medium"
-    else:
-        confidence = "low"
-
-    # Guard against over-claiming rare purebreds on ordinary campus stray cats
-    if not is_native and top_prob < 0.30 and native_mass >= 0.35:
-        breed_label = f"中华田园猫 / 混血（具{top_breed}特征）"
-        confidence = "low"
-    elif is_native:
-        breed_label = "中华田园猫"
-    else:
-        breed_label = top_breed
-
     coat_keys = [str(k) for k in bank["coat_keys"].tolist()]
     coat_mat = np.asarray(bank["coat_vecs"], dtype=np.float32)
     coat_probs = _softmax((coat_mat @ vec) * scale, np)
     coat_idx = int(np.argmax(coat_probs))
     coat_label = coat_keys[coat_idx]
     coat_prob = float(coat_probs[coat_idx])
-
-    features = []
-    if is_native and "（" in top_breed:
-        sub = top_breed.split("（", 1)[1].rstrip("）")
-        features.append(f"田园猫常见{sub}品相")
-    if coat_prob >= 0.35:
-        features.append(f"毛色呈{coat_label}特征")
-
+    features = [f"辅助毛色参考：{coat_label}"] if coat_prob >= 0.30 else []
     return {
-        "source": "local_clip",
+        "is_cat": True,
+        "source": "local_assist",
         "model": "clip-vit-b32-q8",
-        "breed": breed_label,
-        "breed_confidence": confidence,
+        "breed": "未知",
+        "breed_confidence": "low",
         "coat": coat_label,
-        "features": features[:4],
+        "features": features,
         "neutered_hint": "unknown",
-        "summary": f"本地视觉模型识别为「{breed_label}」（{coat_label}，置信度：{'高' if confidence == 'high' else '中' if confidence == 'medium' else '参考'}）。",
+        "summary": f"本地模型仅辅助初筛毛色参考（{coat_label}），具体品种与特征以云端视觉模型拍板或人工核验为准。",
     }
+
+
+def analyze_crop_once(crop):
+    """Run CLIP image encoding ONCE and return both species gate and coat assist hint."""
+    vec, bank = _encode_image(crop)
+    if vec is None:
+        return None
+    return {
+        "species": _species_from_vec(vec, bank),
+        "coat": _coat_from_vec(vec, bank),
+    }
+
+
+def inspect_species(crop):
+    """Classify crop into cat / person / dog / other to block non-cat uploads."""
+    vec, bank = _encode_image(crop)
+    return _species_from_vec(vec, bank)
+
+
+def classify_coat_only(crop, *, vec=None, bank=None):
+    """Local Stage-1 coat assist ONLY (defers authoritative breed/type decision to Cloud VLM)."""
+    if vec is None or bank is None:
+        vec, bank = _encode_image(crop)
+    return _coat_from_vec(vec, bank)
+
+
+def classify_breed_and_coat(crop):
+    """Compatibility alias: delegates to local coat-only assist without claiming purebred types."""
+    return classify_coat_only(crop)

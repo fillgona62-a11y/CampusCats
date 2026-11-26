@@ -38,15 +38,19 @@ def base_url(value):
 
 
 def public_socket(address, timeout, source_address=None):
-    # Connect to the exact numeric address checked here. TLS still verifies the provider hostname.
-    for family, kind, proto, _, sockaddr in socket.getaddrinfo(*address, type=socket.SOCK_STREAM):
+    # Connect to the exact numeric address checked here, preferring IPv4 to avoid 15s IPv6 hangs.
+    infos = socket.getaddrinfo(*address, type=socket.SOCK_STREAM)
+    infos.sort(key=lambda item: 0 if item[0] == socket.AF_INET else 1)
+    connect_timeout = min(float(timeout or 10), 8.0)
+    for family, kind, proto, _, sockaddr in infos:
         ip = ipaddress.ip_address(sockaddr[0])
         if not ip.is_global or ip.is_multicast or getattr(ip, "ipv4_mapped", None) or getattr(ip, "sixtofour", None) or getattr(ip, "teredo", None) or (ip.version == 6 and ip in ipaddress.ip_network("64:ff9b::/96")):
             continue
         sock = socket.socket(family, kind, proto)
         try:
-            sock.settimeout(timeout)
+            sock.settimeout(connect_timeout)
             sock.connect(sockaddr)
+            sock.settimeout(timeout)
             return sock
         except OSError:
             sock.close()
@@ -110,7 +114,7 @@ def effective(db, uid, folder):
     # Auto-heal common DeepSeek model name typo ("deepseek-flash" -> "deepseek-chat")
     if "api.deepseek.com" in pub["base_url"] and pub["chat_model"].strip().lower() == "deepseek-flash":
         pub["chat_model"] = "deepseek-chat"
-    return dict(pub, api_key=key, enabled=True, timeout=25, scope="personal" if row["owner"] else "shared")
+    return dict(pub, api_key=key, enabled=True, timeout=35, scope="personal" if row["owner"] else "shared")
 
 
 def configure(db, owner, body, folder):
@@ -142,7 +146,7 @@ def configure(db, owner, body, folder):
         if protocol == "tools":
             payload.update(tools=TOOLS, tool_choice="auto")
         try:
-            reply = completion({"base_url":url, "api_key":key, "timeout":15}, payload)
+            reply = completion({"base_url":url, "api_key":key, "timeout":25}, payload)
             message = reply["choices"][0]["message"]
             if not message.get("content") and not message.get("tool_calls"):
                 raise KeyError
@@ -168,7 +172,7 @@ def configure(db, owner, body, folder):
                 }],
             }
             try:
-                v_reply = completion({"base_url":url, "api_key":key, "timeout":15}, v_payload)
+                v_reply = completion({"base_url":url, "api_key":key, "timeout":25}, v_payload)
                 v_msg = v_reply["choices"][0]["message"]
                 if not v_msg.get("content"):
                     raise KeyError

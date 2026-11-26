@@ -85,3 +85,23 @@
    - `install_reid_model.py` 一键下载并校验 `dinov2-base-q8.onnx`、`yolov8s.onnx` 与 `clip-vision-q8.onnx` + 预计算 `clip-cat-prompts.npz`，无需 PyTorch 即可离线识别 16 类猫品种与 11 类花色。
 4. **猫猫助手重构与云端免费/学校 GPT 模型预设**（`server/agent.py`、`server/providers.py`、`web/agent.js`、`web/agent-settings.js`）
    - 接入自动多猫检测与 `media_dir` 局部几何重排，修复无空格中文自然提问检索、Markdown 列表/加粗渲染，并内置 OpenAI GPT、智谱 `glm-4v-flash`、硅基流动 `Qwen2.5-VL`、通义千问与 DeepSeek 一键填入预设。
+
+---
+
+# CampusCats v0.6.1 ~ v0.6.3-SYLU 定位、云端主导识猫与稳定性升级
+
+## v0.6.1 ~ v0.6.2-SYLU（高德融合定位 + App 内一键更新与热更新）
+
+1. **高德精准融合定位与沈理地标校准**（`web/campus-map.js`、`web/capture.js`、`mobile/android/src/campus/cats/MainActivity.java`、`web/style.css`）
+   - 修复安卓 WebView 高德地图拦截并新增 `locateAccurate()` 精准融合定位与坐标校准；升级移动端卡片动效，平滑 CLIP `logit_scale`（上限 `35.0`）与正脸几何惩罚。
+2. **前端热更新 & App 内一键更新**（`server/app.py`、`mobile/android/AndroidManifest.xml`、`mobile/android/src/campus/cats/CaptureFile.java`、`web/app.js`、`.github/workflows/build-apk.yml`）
+   - 新增 `/api/app/version` 版本检查接口与 APK `ContentProvider` 权限安装流，支持前端资源实时更新与安卓应用内一键下载覆盖升级。
+
+## v0.6.3-SYLU（基于 v0.6.2 的识别准确率、稳定性与安全全面优化）
+
+1. **云端视觉模型主导拍板 + 本地纯辅助去重推理**（`server/clip_classifier.py`、`server/ai_vision.py`、`server/catalog.py`、`server/vision.py`）
+   - 本地 CLIP 改为单次前向 `analyze_crop_once(crop)`（同时输出物种与 `local_assist` 毛色参考），不再抢判纯种猫品种；开启云端 VLM 时跳过本地花色互斥预过滤，并将 VLM 同猫/异猫置信度阈值设为 `0.55`、`deadline` 放宽至 `45s`、`timeout` 提升至 `30s`。
+2. **修复暗光/长毛猫误杀与消除重复 YOLO**（`server/detector.py`、`server/catalog.py`）
+   - 全图只跑一次 `_run_full_frame_scan()`（支持低照度 `luma < 90` 提亮二次召回），严格禁止在 `verify_box_is_cat()` 内对紧贴子裁剪框重复跑 YOLO。
+3. **压测稳定性、带宽压缩、UTC+8 时区与安全加固**（`server/providers.py`、`web/ui.js`、`web/capture.js`、`web/review.js`、`web/sw.js`、`server/media.py`、`server/agent.py`、`server/accounts.py`、`deploy/`）
+   - 公网请求 IPv4 优先（8s 快速建连 + 35s 读超时）、前端只读与 detect/identify 瞬断重试、`/detect`（800px）与 `/identify`（1024px）压缩发送、Gunicorn/Nginx keepalive 调优、猫猫助手北京时间（UTC+8）转换、审核页 `coat_hint` 自动预填、PWA 缓存升级至 `campuscats-shell-v20`、`AndroidManifest` 升级至 `0.6.3`（`versionCode=10`），并移除源码默认管理员明文密码，改由环境变量显式配置。

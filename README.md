@@ -1,4 +1,4 @@
-# 猫迹 · 沈阳理工大学校园猫图鉴（v0.6.0-SYLU）
+# 猫迹 · 沈阳理工大学校园猫图鉴（v0.6.3-SYLU）
 
 猫迹帮同学记录在校园里遇到的猫，当前面向**沈阳理工大学（浑南校区 · 南屏中路 6 号）**开展校内测试。同一只猫可以有多个别名和多条目击记录，图鉴只计一只。游客可以直接浏览图鉴、通过**高德实景校园猫地图**查看校内地标与猫猫时空轨迹、用「照片查查」完成多猫查重与品种花色识别，或向「猫猫助手」查询校园猫动态；注册登录后可以提交目击、点亮个人猫册、参与校园定点观察、补充别名，以及生成带二维码的高清相遇卡与重遇卡。
 
@@ -12,13 +12,22 @@
 
   * **下载源二（GitHub 仓库源）**：[从 GitHub 下载 CampusCats-Android.apk](https://github.com/fillgona62-a11y/CampusCats/raw/main/downloads/CampusCats-Android.apk)（仓库内路径：`downloads/CampusCats-Android.apk`）
 
-  * **使用与升级说明**：安装后默认连接 `https://thickearth.online`（网页内容随线上 `v0.6.0-SYLU` 自动同步更新），首页点「拍照记录」即可拍照或选图；无网或未登录时可先存为**本机草稿**，联网登录后再提交。若学校后续更换域名，可在「我的手记」或离线重连页展开「切换校园站点地址」直接修改。*注：0.4.0 起改用持久化正式签名证书，若此前安装过早期 0.2.x / 0.3.0 测试包提示签名不一致，请先提交本机草稿并卸载旧包后安装一次，后续版本均可直接覆盖更新。*
+  * **使用与升级说明**：安装后默认连接 `https://thickearth.online`（网页内容随线上 `v0.6.3-SYLU` 热更新，App 内亦可一键检查并下载更新安装包），首页点「拍照记录」即可拍照或选图；无网或未登录时可先存为**本机草稿**，联网登录后再提交。若学校后续更换域名，可在「我的手记」或离线重连页展开「切换校园站点地址」直接修改。*注：0.4.0 起改用持久化正式签名证书，若此前安装过早期 0.2.x / 0.3.0 测试包提示签名不一致，请先提交本机草稿并卸载旧包后安装一次，后续版本均可直接覆盖更新。*
 
 * **iPhone / iPad（PWA 桌面版）** 用 Safari 打开 <https://thickearth.online/>，点底栏「分享」→「添加到主屏幕」，即可从桌面图标全屏进入。
 
 * **iOS 工程源码下载** 仓库提供已预设 `https://thickearth.online` 地址的 Xcode 工程包（尚无直接安装的签名 IPA）。在 Mac 上解压后用 Xcode 打开 `CampusCats.xcodeproj`，在「Signing & Capabilities」选择自己的开发团队即可真机运行：[下载 iOS 工程 ZIP](https://github.com/fillgona62-a11y/CampusCats/raw/main/downloads/CampusCats-iOS-Xcode.zip)（仓库内路径：`downloads/CampusCats-iOS-Xcode.zip`）。
 
-## 最新功能与近期更新（v0.4.0 ~ v0.6.0-SYLU）
+## 最新功能与近期更新（v0.4.0 ~ v0.6.3-SYLU）
+
+### v0.6.3-SYLU（基于 v0.6.2-SYLU：云端主导识猫 + 暗光防误杀 + 稳定性与安全性全面优化）
+- **云端视觉模型占主导权重 + 消除重复 ONNX 推理**：`server/clip_classifier.py`、`server/ai_vision.py` 与 `server/catalog.py` 重构为单次前向复用的 `analyze_crop_once(crop)`，本地 CLIP 不再抢判纯种猫品种（统一作为 `local_assist` 毛色与物种辅助），开启云端视觉模型时跳过本地花色互斥预过滤并将同猫/异猫对比置信阈值校至 `0.55`；全图与裁剪框不再重复跑 YOLO 与 CLIP。
+- **修复暗光/长毛猫误杀**：`server/detector.py` 禁止对紧贴子裁剪框再次运行 `YOLOv8n`（彻底解决双猫拼图或暗光黑猫被子框误判为犬类的问题），并增加低照度（`luma < 90`）提亮二次召回。
+- **弱网稳定性、安全与体验优化**：`server/providers.py` 强制公网 IPv4 优先建连并放宽超时至 `35s`；`web/ui.js` 对只读及 `/api/detect`、`/api/identify` 瞬断自动静默重试 1 次；`web/capture.js` 按 `800px` / `1024px` 轻量化发送查重图适配 3 Mbps 带宽；`server/accounts.py` 移除源码明文默认管理员密码改由环境变量显式配置；`server/agent.py` 统一输出北京时间（UTC+8）；`web/review.js` 自动预填 `coat_hint`。
+
+### v0.6.1 ~ v0.6.2-SYLU（高德精准融合定位 + 移动端体验 + 前端热更新与 App 一键更新）
+- **高德精准融合定位与沈理地标校准**：新增 `locateAccurate()` 融合定位逻辑与 WGS84/GCJ02 坐标校准，修复安卓端高德地图拦截并优化移动端动效与局部特征/温度缩放（`logit_scale` 上限 `35.0`、`local_heuristic` 豁免、花纹惩罚平滑）。
+- **前端联网热更新 & App 内一键更新**：新增 `GET /api/app/version`、`AndroidManifest.xml` `REQUEST_INSTALL_PACKAGES` 权限及 `CaptureFile.java` APK 授权安装分发，支持应用内一键下载更新与 GitHub Actions 自动同步仓库安装包。
 
 ### v0.6.0-SYLU（高德实景全量地图 + 三模型防误识视觉栈 + 猫猫助手全面升级）
 - **纯高德实景校园猫地图（移除旧版离线 SVG 地图）**：全面启用高德地图 JS API 2.0 实景与卫星图，修复 HTTPS 下 `Referrer-Policy` 导致的 `ERR_BLOCKED_BY_ORB` 拦截与安卓 WebView WebGL 矢量瓦片兼容；10 个沈理核心地标、精确 GPS 猫咪足迹弹窗与时空轨迹折线同屏呈现。

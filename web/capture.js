@@ -49,6 +49,15 @@ function cropData(frame, [x, y, w, h]) {
     crop.getContext('2d').drawImage(frame, x * frame.width, y * frame.height, w * frame.width, h * frame.height, 0, 0, crop.width, crop.height);
     return crop.toDataURL('image/jpeg', .85);
 }
+function resizedDataUrl(sourceCanvas, maxSide, quality = .82) {
+    if (!sourceCanvas) return '';
+    const w = sourceCanvas.width, h = sourceCanvas.height;
+    const ratio = Math.min(1, maxSide / Math.max(w, h));
+    if (ratio >= 0.999) return sourceCanvas.toDataURL('image/jpeg', quality);
+    const out = canvas(Math.max(1, Math.round(w * ratio)), Math.max(1, Math.round(h * ratio)));
+    out.getContext('2d').drawImage(sourceCanvas, 0, 0, out.width, out.height);
+    return out.toDataURL('image/jpeg', quality);
+}
 function newRequestId() {
     return globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
 }
@@ -68,7 +77,13 @@ function recordBadge(rs) {
 }
 function aiProfileCard(ai) {
     if (!ai) return '';
-    const sourceTag = ai.source === 'vlm' ? 'AI 视觉复核' : ai.source === 'local_clip' ? '本地深度模型识别' : '本地颜色初判';
+    const sourceTag = ai.source === 'vlm'
+        ? '云端视觉模型拍板'
+        : ai.source === 'local_assist'
+            ? '本地毛色辅助（不作最终品种判定）'
+            : ai.source === 'local_clip'
+                ? '本地深度模型辅助'
+                : '本地颜色初判';
     const neuter = ai.neutered_hint === 'yes' ? '疑似可见剪耳绝育标记' : ai.neutered_hint === 'no' ? '未见明显剪耳' : '';
     const chips = [...(ai.features || []), ...(neuter ? [neuter] : [])];
     return `<div class="ai-profile-card"><div class="ai-profile-head"><strong>品种与花色识别</strong><span class="ai-tag">${sourceTag}</span></div>
@@ -185,7 +200,8 @@ export function capturePage(main, onSuccess, {saveLocal, draft, lookupOnly = fal
         feedback.textContent = '正在自动检测画面中的猫猫…';
         let noCatDetected = false;
         try {
-            const det = await api('/detect', { photo });
+            const detPhoto = resizedDataUrl(frame, 800, 0.78) || photo;
+            const det = await api('/detect', { photo: detPhoto });
             if (disposed || version !== revision) return;
             if (det?.boxes?.length) {
                 boxes = det.boxes.slice(0, 8);
@@ -283,7 +299,8 @@ export function capturePage(main, onSuccess, {saveLocal, draft, lookupOnly = fal
     async function identify() {
         const version = revision;
         const area = form.elements.area.value.trim();
-        const payload = { photo, boxes: targets(), area, cloud_photo: form.elements.cloud_photo.checked };
+        const idPhoto = resizedDataUrl(frame, 1024, 0.82) || photo;
+        const payload = { photo: idPhoto, boxes: targets(), area, cloud_photo: form.elements.cloud_photo.checked };
         const feedback = $('#lookup-status');
         const trigger = $('#identify');
         trigger.disabled = true;

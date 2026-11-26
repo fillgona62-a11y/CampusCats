@@ -53,14 +53,27 @@ export function status(value) {
     return `<span class="pill ${esc(value)}">${({ pending: '待辨认', confirmed: '身份已确认', rejected: '未采纳' })[value] || '待处理'}</span>`;
 }
 export async function api(path, body) {
+    const idempotent = body === undefined || path === '/detect' || path === '/identify';
+    const maxAttempts = idempotent ? 2 : 1;
     let response;
-    try {
-        response = await fetch('/api' + path, {
-            method: body === undefined ? 'GET' : 'POST', credentials: 'same-origin', cache: 'no-store', headers: body === undefined ? {} : { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body)
-        });
-    }
-    catch {
-        throw new Error('暂时连不上服务器，请检查网络后重试。');
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+            response = await fetch('/api' + path, {
+                method: body === undefined ? 'GET' : 'POST', credentials: 'same-origin', cache: 'no-store', headers: body === undefined ? {} : { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body)
+            });
+            if (attempt < maxAttempts && (response.status === 502 || response.status === 503 || response.status === 504)) {
+                await new Promise(r => setTimeout(r, 450));
+                continue;
+            }
+            break;
+        }
+        catch {
+            if (attempt < maxAttempts) {
+                await new Promise(r => setTimeout(r, 450));
+                continue;
+            }
+            throw new Error('暂时连不上服务器，请检查网络后重试。');
+        }
     }
     const data = await response.json().catch(() => ({ error: '服务器响应异常，请稍后重试。' }));
     if (!response.ok || data.error) {

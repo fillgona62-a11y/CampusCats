@@ -246,12 +246,19 @@ class V060UpgradeTests(unittest.TestCase):
         cat_embed /= np.linalg.norm(cat_embed)
         im = Image.new("RGB", (120, 120), (120, 130, 140))
 
-        with mock.patch.object(clip_classifier, "_encode_image", return_value=(cat_embed, bank)):
+        with mock.patch.object(clip_classifier, "_encode_image", return_value=(cat_embed, bank)) as enc_mock:
+            once = clip_classifier.analyze_crop_once(im)
+            self.assertEqual(enc_mock.call_count, 1)
+            self.assertTrue(once["species"]["is_cat"])
+            self.assertEqual(once["coat"]["source"], "local_assist")
+            self.assertEqual(once["coat"]["breed"], "未知")
+            self.assertEqual(once["coat"]["coat"], "蓝白 / 灰白")
+
             sp = clip_classifier.inspect_species(im)
             self.assertTrue(sp["is_cat"])
-            prof = clip_classifier.classify_breed_and_coat(im)
-            self.assertEqual(prof["source"], "local_clip")
-            self.assertEqual(prof["breed"], "英国短毛猫")
+            prof = clip_classifier.classify_coat_only(im)
+            self.assertEqual(prof["source"], "local_assist")
+            self.assertEqual(prof["breed"], "未知")
             self.assertEqual(prof["coat"], "蓝白 / 灰白")
 
         person_embed = np.asarray([0.05, 0.98, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32)
@@ -371,11 +378,34 @@ class V060UpgradeTests(unittest.TestCase):
                 self.assertNotIn("max_tokens", p)
 
     def test_builtin_admin_account_login_and_permissions(self):
+        # Without explicit env vars, NO default admin account or password exists in source/DB
         with tempfile.TemporaryDirectory() as tmp:
             application = app_mod.App(Path(tmp) / "data", Path(tmp) / "media")
-            code, res, hdrs = self._call(application, "/api/login", {
+            with closing(catalog.connect(application.db_path)) as db:
+                cnt = db.execute("SELECT COUNT(*) FROM users WHERE role='reviewer'").fetchone()[0]
+                self.assertEqual(cnt, 0)
+            code, _, _ = self._call(application, "/api/login", {
                 "email": "admin@sylu.edu.cn",
-                "password": "SyluCats@2026!",
+                "password": "AnyUnconfiguredPassword!2026",
+            })
+            self.assertEqual(code, 401)
+
+            # /api/app/version reflects v0.6.3 (version_code=10)
+            v_code, v_res, _ = self._call(application, "/api/app/version")
+            self.assertEqual(v_code, 200)
+            self.assertEqual(v_res["version_code"], 10)
+            self.assertEqual(v_res["version_name"], "0.6.3")
+
+        # When CAMPUS_ADMIN_EMAIL & CAMPUS_ADMIN_PASSWORD are provided via env, reviewer account is provisioned
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {
+            "CAMPUS_ADMIN_EMAIL": "envadmin@sylu.edu.cn",
+            "CAMPUS_ADMIN_PASSWORD": "StrongEnvPass!2026",
+            "CAMPUS_ADMIN_NICKNAME": "环境管理员",
+        }):
+            application = app_mod.App(Path(tmp) / "data", Path(tmp) / "media")
+            code, res, hdrs = self._call(application, "/api/login", {
+                "email": "envadmin@sylu.edu.cn",
+                "password": "StrongEnvPass!2026",
             })
             self.assertEqual(code, 200)
             self.assertEqual(res["user"]["role"], "reviewer")
@@ -386,6 +416,80 @@ class V060UpgradeTests(unittest.TestCase):
             c_ag, ag_set, _ = self._call(application, "/api/agent/settings", cookie=cookie)
             self.assertEqual(c_ag, 200)
             self.assertIn("shared", ag_set)
+
+    def test_dark_cat_not_falsely_rejected_by_tight_crop_and_single_yolo_pass(self):
+        im = Image.new("RGB", (640, 480), (45, 45, 48))
+        raw_out = np.zeros((2, 84), dtype=np.float32)
+        raw_out[0, :4] = [160, 240, 240, 320]
+        raw_out[0, 4 + 15] = 0.72
+        raw_out[1, :4] = [480, 240, 240, 320]
+        raw_out[1, 4 + 15] = 0.75
+
+        with mock.patch.object(detector, "is_enabled", return_value=True), \
+             mock.patch.object(clip_classifier, "is_enabled", return_value=False), \
+             mock.patch.object(detector, "_engine", return_value=("sess", "in", "out")), \
+             mock.patch.object(detector, "_infer_raw_640", return_value=(raw_out, 1.0, 0, 80)) as infer_mock:
+            info = detector.inspect_image_subjects(im)
+            self.assertEqual(len(info["cats"]), 2)
+            # Single full-frame scan: _infer_raw_640 called ONLY ONCE
+            self.assertEqual(infer_mock.call_count, 1)
+
+            # Tight crop check reusing frame_info does NOT re-run YOLO and never rejects overlapping detected cats
+            gate = detector.verify_box_is_cat(im, info["cats"][0]["box"], frame_info=info)
+            self.assertTrue(gate["is_cat"])
+            self.assertEqual(infer_mock.call_count, 1)
+
+    def test_cloud_vlm_decisive_threshold_and_beijing_time_and_coat_hint(self):
+        # Verify Cloud VLM >= 0.55 takes decisive priority in assess_db_match
+        cand = [{"id": 1, "name": "墨团", "coat": "纯黑", "area": "图书馆（琴园环路）", "similarity": 0.71, "distance": 0.24}]
+        rs_same = vision.assess_db_match(cand, 1, area="", usable=True, vlm_compare={
+            "source": "vlm", "verdict": "same_cat", "best_candidate_index": 1, "confidence": 0.58, "reason": "五官轮廓一致"
+        })
+        self.assertEqual(rs_same["status"], "possible_match")
+        rs_diff = vision.assess_db_match(cand, 1, area="", usable=True, vlm_compare={
+            "source": "vlm", "verdict": "different_cat", "best_candidate_index": None, "confidence": 0.58, "reason": "白斑不同"
+        })
+        self.assertEqual(rs_diff["status"], "no_candidate")
+        self.assertIsNone(rs_diff["top_cat_id"])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            application = app_mod.App(Path(tmp) / "data", Path(tmp) / "media")
+            _, _, m_hdr = self._call(application, "/api/register", {
+                "email": "bj1@sylu.edu", "password": "Password123!", "nickname": "M"
+            })
+            _, _, r_hdr = self._call(application, "/api/register", {
+                "email": "bj2@sylu.edu", "password": "Password123!", "nickname": "R"
+            })
+            m_cookie = m_hdr["Set-Cookie"].split(";")[0]
+            r_cookie = r_hdr["Set-Cookie"].split(";")[0]
+            with closing(catalog.connect(application.db_path)) as db, db:
+                db.execute("UPDATE users SET role='reviewer' WHERE email='bj2@sylu.edu'")
+
+            _, up, _ = self._call(application, "/api/sightings", {
+                "photo": _rich_photo_b64(),
+                "boxes": [[0, 0, 1, 1]],
+                "area": "图书馆（琴园环路）",
+                "note": "UTC测试",
+                "request_id": "bj-time-1",
+                "observed_at": "2026-11-23T12:43:00Z",
+            }, cookie=m_cookie)
+            sid = up["sightings"][0]["id"]
+
+            # Pending review exposes auto coat_hint
+            _, rev, _ = self._call(application, "/api/review", cookie=r_cookie)
+            self.assertTrue(rev["sightings"][0].get("coat_hint"))
+
+            self._call(application, f"/api/review/{sid}", {
+                "action": "new", "name": "墨团子", "coat": "纯黑", "reason": "建档"
+            }, cookie=r_cookie)
+
+            import agent
+            with closing(catalog.connect(application.db_path)) as db:
+                ctx = {"cards": {}}
+                detail = agent._execute_tool(db, "get_cat_detail", {"cat_id": 1}, ctx)
+                self.assertEqual(detail["cat"]["last_seen"], "2026-11-23 20:43（北京时间）")
+                self.assertEqual(detail["recent_sightings"][0]["observed_at"], "2026-11-23 20:43（北京时间）")
+                self.assertNotIn("UTC", detail["cat"]["last_seen"])
 
 
 if __name__ == "__main__":

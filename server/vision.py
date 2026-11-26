@@ -333,13 +333,13 @@ def assess_db_match(
         reason = vlm_compare.get("reason") or ""
         conf = float(vlm_compare.get("confidence", 0.0) or 0.0)
         best_idx = vlm_compare.get("best_candidate_index")
-        if verdict == "same_cat" and conf >= 0.65 and best_idx and nearest.get("name"):
+        if verdict == "same_cat" and conf >= 0.55 and best_idx and nearest.get("name"):
             return dict(
                 result,
                 status="possible_match",
                 summary=f"视觉复核高度疑似「{nearest['name']}」：{reason}" if reason else f"视觉复核高度疑似「{nearest['name']}」，请核对脸部与花纹。",
             )
-        if verdict == "different_cat" and conf >= 0.65:
+        if verdict == "different_cat" and conf >= 0.55:
             return dict(
                 result,
                 top_cat_id=None,

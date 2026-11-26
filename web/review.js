@@ -10,7 +10,7 @@ export function reviewPage(main, data, cats, refresh) {
     <details class="pending-peers"><summary>对照其他待辨认照片</summary><div class="peer-list"></div></details>
     <form><label class="field"><span>复核决定</span><select name="action" required><option value="">选择操作</option><option value="match">关联已有档案</option><option value="new">确认为新猫并建档</option><option value="reject">未采纳这条目击</option></select></label>
     <label class="field" data-part="match" hidden><span>对照档案</span><select name="cat_id"><option value="">选择已有档案</option></select></label>
-    <div data-part="new" hidden><label class="field"><span>档案名</span><input name="name" maxlength="50"></label><label class="field"><span>花色或毛长</span><input name="coat" maxlength="60" placeholder="例如，橘白短毛"></label>
+    <div data-part="new" hidden><label class="field"><span>档案名</span><input name="name" maxlength="50"></label><label class="field"><span>花色或毛长</span><input name="coat" value="${esc(s.coat_hint || '')}" maxlength="60" placeholder="例如，橘白短毛"></label>
     <div class="form-grid"><label class="field"><span>性别（选填）</span><select name="sex"><option value="unknown">待确认</option><option value="female">母猫</option><option value="male">公猫</option></select></label>
     <label class="field"><span>绝育情况（选填）</span><select name="neutered"><option value="unknown">待确认</option><option value="neutered">已绝育（剪耳等）</option><option value="intact">未绝育</option></select></label></div>
     <label class="field"><span>性格与相处提示（选填）</span><input name="temperament" maxlength="120" placeholder="例如，亲人可摸 / 怕生勿扰 / 护食勿碰"></label></div>

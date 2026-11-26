@@ -22,7 +22,7 @@ import providers
 
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_VISION_MODEL = "gpt-4o-mini"
-DEFAULT_TIMEOUT = 25
+DEFAULT_TIMEOUT = 30
 
 
 def llm_config():
@@ -44,6 +44,11 @@ def llm_config():
         "vision_model": vision_model,
         "timeout": max(5.0, min(timeout, 90.0)),
     }
+
+
+def has_cloud_vlm():
+    cfg = llm_config()
+    return bool(cfg.get("enabled") and cfg.get("vision_model"))
 
 
 def _encode_jpeg_b64(crop, max_side=512):
@@ -258,8 +263,8 @@ def _vision_result(raw, model):
     }
 
 
-def classify_cat_crop(crop, *, allow_remote=False, timeout=None):
-    """Return structured breed/coat/feature analysis for a cropped cat image."""
+def classify_cat_crop(crop, *, allow_remote=False, timeout=None, precomputed_clip=None):
+    """Return structured breed/coat/feature analysis, giving Cloud VLM decisive priority."""
     cfg = llm_config()
     if allow_remote and cfg["enabled"] and cfg["vision_model"]:
         try:
@@ -269,8 +274,11 @@ def classify_cat_crop(crop, *, allow_remote=False, timeout=None):
         except (OSError, ValueError, KeyError, IndexError, TypeError, AttributeError):
             pass
 
+    if isinstance(precomputed_clip, dict) and precomputed_clip.get("coat"):
+        return precomputed_clip["coat"]
+
     if clip_classifier.is_enabled():
-        clip_profile = clip_classifier.classify_breed_and_coat(crop)
+        clip_profile = clip_classifier.classify_coat_only(crop)
         if clip_profile is not None:
             clip_profile["is_cat"] = True
             return clip_profile
@@ -324,9 +332,9 @@ def compare_candidates_vlm(query_crop, candidate_items, *, allow_remote=False, t
     prompt = (
         "你是一位校园流浪猫个体辨认专家。上图最左侧橙色标题「NEW」是刚拍到的待识别画面，右侧「#1」「#2」「#3」是本地初筛出的最像候选猫参考照：\n"
         + "\n".join(cand_lines)
-        + "\n请只看这一张拼好的对比图，一次性完成两件事："
+        + "\n注意：本地模型仅做了粗筛，你是本次识别的最终拍板者。请只看这一张拼好的对比图，一次性给出权威结论："
         "\n1）身份拍板：逐项对比额头纹/M纹走向、鼻梁与嘴周白斑边界、耳朵是否剪耳/缺口、胸腹四肢花纹；校园里同花色异猫很常见，局部斑纹不一致请果断判为 different_cat（若 NEW 根本不是猫则设 is_cat 为 false）。"
-        "\n2）NEW 自身特征描述：给出 NEW 的品种初判、毛色描述、是否可见绝育剪耳标记及显著外观特征。"
+        "\n2）NEW 自身特征描述：权威判断 NEW 的最可能品种、毛色毛长、是否可见绝育剪耳标记及显著外观特征。"
         "\n严格输出 JSON，不要包含任何额外解释：\n"
         '{\n'
         '  "is_cat": true 或 false,\n'

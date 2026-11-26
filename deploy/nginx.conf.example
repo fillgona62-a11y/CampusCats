@@ -25,6 +25,7 @@ server {
     root /srv/campuscats/web;
     index index.html;
     client_max_body_size 9m;
+    keepalive_timeout 65;
     add_header X-Content-Type-Options nosniff always;
     add_header Referrer-Policy strict-origin-when-cross-origin always;
     gzip on;
@@ -53,7 +54,10 @@ server {
         proxy_set_header X-Forwarded-Proto https;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_connect_timeout 15s;
+        proxy_send_timeout 90s;
         proxy_read_timeout 90s;
+        proxy_next_upstream error timeout http_502 http_503 http_504;
     }
     # 可选：高德安全密钥服务端代理（启用后可设 AMAP_SERVICE_HOST=https://你的域名/_AMapService，不在前端暴露 securityJsCode）
     # location /_AMapService/ {

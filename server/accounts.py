@@ -115,29 +115,20 @@ def current_user(db, env):
     return dict(row) if row else None
 
 
-DEFAULT_ADMIN_EMAIL = "admin@sylu.edu.cn"
-DEFAULT_ADMIN_NICKNAME = "沈理猫迹管理员"
-DEFAULT_ADMIN_PASSWORD = "SyluCats@2026!"
-DEFAULT_ADMIN_RECOVERY = "SYLU-ADMIN-RECOVERY-2026"
-_DEFAULT_ADMIN_SALT = b"campuscats-admin"
-_DEFAULT_ADMIN_HASH = hashlib.pbkdf2_hmac("sha256", DEFAULT_ADMIN_PASSWORD.encode(), _DEFAULT_ADMIN_SALT, 420_000)
-
-
 def ensure_admin(db):
-    """Idempotently provision the built-in reviewer/admin account on startup."""
+    """Idempotently provision an admin/reviewer ONLY when explicitly configured via environment variables."""
     if os.getenv("CAMPUS_DISABLE_DEFAULT_ADMIN") == "1":
         return
-    email = (os.getenv("CAMPUS_ADMIN_EMAIL") or DEFAULT_ADMIN_EMAIL).strip().lower()
-    password = os.getenv("CAMPUS_ADMIN_PASSWORD") or DEFAULT_ADMIN_PASSWORD
-    nickname = (os.getenv("CAMPUS_ADMIN_NICKNAME") or DEFAULT_ADMIN_NICKNAME).strip() or DEFAULT_ADMIN_NICKNAME
-    recovery = (os.getenv("CAMPUS_ADMIN_RECOVERY") or DEFAULT_ADMIN_RECOVERY).strip() or DEFAULT_ADMIN_RECOVERY
+    email = os.getenv("CAMPUS_ADMIN_EMAIL", "").strip().lower()
+    password = os.getenv("CAMPUS_ADMIN_PASSWORD", "")
+    if not email or len(password) < 8:
+        return
+    nickname = (os.getenv("CAMPUS_ADMIN_NICKNAME") or "校园猫图鉴管理员").strip() or "校园猫图鉴管理员"
+    recovery = (os.getenv("CAMPUS_ADMIN_RECOVERY") or "").strip() or secrets.token_urlsafe(18)
     row = db.execute("SELECT id, role FROM users WHERE email=?", (email,)).fetchone()
     if row is None:
-        if password == DEFAULT_ADMIN_PASSWORD:
-            salt, cred = _DEFAULT_ADMIN_SALT, _DEFAULT_ADMIN_HASH
-        else:
-            salt = secrets.token_bytes(16)
-            cred = password_hash(password, salt)
+        salt = secrets.token_bytes(16)
+        cred = password_hash(password, salt)
         db.execute(
             "INSERT INTO users(email, nickname, salt, password_hash, recovery_hash, role) VALUES(?,?,?,?,?,'reviewer')",
             (email, nickname, salt, cred, digest(recovery)),

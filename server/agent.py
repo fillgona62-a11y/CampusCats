@@ -25,6 +25,7 @@ from catalog import SYLU_PRESET_AREAS, SIGHTING_QUERY, catalog, identify, iso, s
 from media import Problem, canonical_photo
 
 DEFAULT_CHAT_MODEL = "gpt-4o-mini"
+_BEIJING_TZ = timezone(timedelta(hours=8))
 _MAX_LLM_CONCURRENCY = max(1, min(int(os.getenv("CAMPUSCATS_LLM_CONCURRENCY", "3")), 32))
 _LLM_SLOTS = threading.BoundedSemaphore(_MAX_LLM_CONCURRENCY)
 
@@ -35,8 +36,9 @@ SYSTEM_PROMPT = (
     "1. 严格基于工具返回的真实数据库与识别结果回答，绝不编造不存在的猫档案或目击记录。\n"
     "2. 若工具返回 status 为 not_a_cat（画面为人像、犬类或无猫景物），请温和明确告知未检测到猫咪，不要强行猜测猫品种或花色。\n"
     "3. 若一张图检测到多只猫，请按编号逐只说明查重结果与品种/花色初判；若为 weak_candidate，提醒同学同花色不同猫易相似，需核对耳尖与脸部花纹。\n"
-    "4. 涉及品种识别时，清晰区分「AI / 本地模型初判」与「维护者已核验（verified）」。\n"
-    "5. 语气温暖、简洁、条理清晰，适合手机端阅读。"
+    "4. 涉及品种识别时，清晰区分「AI / 云端模型初判」与「维护者已核验（verified）」；本地辅助仅作花色初筛，不要把本地辅助说成绝对品种结论。\n"
+    "5. 所有时间均按北京时间（UTC+8）展示，不要输出 UTC 时间。\n"
+    "6. 语气温暖、简洁、条理清晰，适合手机端阅读。"
 )
 
 TOOLS = [
@@ -129,6 +131,19 @@ def status_info():
     }
 
 
+def _fmt_bj_time(iso_str):
+    raw = str(iso_str or "").strip()
+    if not raw:
+        return ""
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(_BEIJING_TZ).strftime("%Y-%m-%d %H:%M（北京时间）")
+    except ValueError:
+        return raw
+
+
 def _compact_card(cat):
     return {
         "id": cat["id"],
@@ -141,7 +156,7 @@ def _compact_card(cat):
         "care_status": cat.get("care_status", "school"),
         "temperament": cat.get("temperament", ""),
         "area": cat.get("area", ""),
-        "last_seen": cat.get("last_seen", ""),
+        "last_seen": _fmt_bj_time(cat.get("last_seen", "")),
         "sightings": cat.get("sightings", 0),
         "aliases": cat.get("aliases", []),
         "photo_url": cat.get("photo_url", ""),
@@ -229,7 +244,7 @@ def _execute_tool(db, name, args, context):
             SIGHTING_QUERY + " WHERE s.cat_id=? ORDER BY f.observed_at DESC, s.id DESC LIMIT 5",
             (cid,),
         )
-        recent = serialize(db, rows)
+        recent = [dict(item, observed_at=_fmt_bj_time(item.get("observed_at", ""))) for item in serialize(db, rows)]
         return {"cat": card, "recent_sightings": recent}
 
     if name == "get_campus_overview":
@@ -251,7 +266,7 @@ def _execute_tool(db, name, args, context):
             params.append(area)
         count = db.execute("SELECT COUNT(*) FROM sightings s JOIN frames f ON f.id=s.frame_id" + where, params).fetchone()[0]
         rows = db.execute(SIGHTING_QUERY + where + " ORDER BY f.observed_at DESC,s.id DESC LIMIT 10", params)
-        items = serialize(db, rows)
+        items = [dict(item, observed_at=_fmt_bj_time(item.get("observed_at", ""))) for item in serialize(db, rows)]
         for item in items:
             cid = item.get("cat_id")
             if cid and cid in cats_map:
@@ -383,11 +398,17 @@ def _local_fallback(db, message, context):
                 lines.append(f"• 首选候选：**{top['name']}**（匹配度约 {pct}%，常出没：{top.get('area') or '待补充'}）")
             if ai_p:
                 feat = "、".join(ai_p.get("features") or [])
-                src_label = "AI 视觉" if ai_p.get("source") == "vlm" else "本地深度模型" if ai_p.get("source") == "local_clip" else "颜色纹理"
-                lines.append(
-                    f"• 品种与花色（{src_label}）：**{ai_p.get('breed', '未知')}**｜花色：**{ai_p.get('coat', '待补')}**"
-                    + (f"｜特征：{feat}" if feat else "")
-                )
+                src = ai_p.get("source")
+                if src == "vlm":
+                    lines.append(
+                        f"• 品种与花色（云端视觉）：**{ai_p.get('breed', '未知')}**｜花色：**{ai_p.get('coat', '待补')}**"
+                        + (f"｜特征：{feat}" if feat else "")
+                    )
+                else:
+                    lines.append(
+                        f"• 本地花色辅助初筛：**{ai_p.get('coat', '待补')}**（品种需云端视觉模型拍板或维护者核验）"
+                        + (f"｜{feat}" if feat else "")
+                    )
 
     if any(k in text for k in ("定点", "观察", "周报", "零目击")):
         used_tools.append("weekly_surveys")

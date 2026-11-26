@@ -281,11 +281,16 @@ def identify(db, body, media_dir=None):
     cats = catalog(db)
     refs = references(db)
     db.commit()
-    deadline = time.monotonic() + 24
+    deadline = time.monotonic() + 45
     reference_count = len({r[0] for r in refs})
+    allow_remote = body.get("cloud_photo") is True
+    cloud_vlm_ready = allow_remote and ai_vision.has_cloud_vlm()
+    frame_info = detector._run_full_frame_scan(image) if detector.is_enabled() else None
     results = []
     for box in boxes:
-        gate = detector.verify_box_is_cat(image, box)
+        gate = detector.verify_box_is_cat(
+            image, box, frame_info=frame_info, cloud_vlm_active=cloud_vlm_ready
+        )
         if not gate["is_cat"]:
             results.append({
                 "box": box,
@@ -305,32 +310,36 @@ def identify(db, body, media_dir=None):
             })
             continue
 
-        # === 第一关（纯本地 0.5s 免费初筛）：特征提取 + 本地毛色初判 + SIFT 重排缩成 Top-3 候选 ===
+        # === 第一关（纯本地快速辅助初筛）：仅提取个体特征向量 + SIFT 局部重排，缩成 Top-3 候选 ===
         analysis = analyze_crop(image, box)
         crop = image.crop(pixel_box(image, box)).convert("RGB")
-        allow_remote = body.get("cloud_photo") is True
-        ai_profile = ai_vision.classify_cat_crop(crop, allow_remote=False) if analysis["usable"] else None
-
         candidates = matched_profiles(analysis, refs, cats, limit=5, area=area)
-        if ai_profile and ai_profile.get("source") != "local_heuristic" and candidates:
-            q_coat = ai_profile.get("coat", "")
-            filtered = []
-            for cand in candidates:
-                if _coat_conflict(q_coat, cand.get("coat", "")):
-                    new_dist = round(cand["distance"] + 0.08, 5)
-                    if new_dist > DEFAULT_MAX_DISTANCE:
-                        continue
-                    cand = dict(cand, distance=new_dist, similarity=distance_to_similarity(new_dist))
-                filtered.append(cand)
-            filtered.sort(key=lambda c: (c["distance"], str(c["id"])))
-            candidates = filtered
+
+        # 仅当未启用云端大模型时才用本地辅助花色做互斥过滤，避免本地暗色毛误判拖累云端候选
+        ai_profile = None
+        if not cloud_vlm_ready and analysis["usable"]:
+            ai_profile = ai_vision.classify_cat_crop(
+                crop, allow_remote=False, precomputed_clip=gate.get("clip_analysis")
+            )
+            if ai_profile and ai_profile.get("source") != "local_heuristic" and candidates:
+                q_coat = ai_profile.get("coat", "")
+                filtered = []
+                for cand in candidates:
+                    if _coat_conflict(q_coat, cand.get("coat", "")):
+                        new_dist = round(cand["distance"] + 0.08, 5)
+                        if new_dist > DEFAULT_MAX_DISTANCE:
+                            continue
+                        cand = dict(cand, distance=new_dist, similarity=distance_to_similarity(new_dist))
+                    filtered.append(cand)
+                filtered.sort(key=lambda c: (c["distance"], str(c["id"])))
+                candidates = filtered
 
         if analysis["usable"] and candidates and media_dir is not None:
             candidates = face_match.rerank_with_local_features(crop, candidates, refs, media_dir)
             candidates = [c for c in candidates if float(c.get("distance", 0.0)) <= DEFAULT_MAX_DISTANCE]
         candidates = candidates[:3]
 
-        # === 第二关（云端精准拍板，每只猫最多仅 1 次云端请求）===
+        # === 第二关（云端精准拍板，权重最高，每只猫最多仅 1 次云端请求）===
         # 有候选时：只发一张拼好的 [NEW | #1 | #2 | #3] 对比图，一次完成「同猫拍板 + 新猫品种毛色剪耳描述」；
         # 无候选（新猫/空库）时：单独发 NEW 裁剪图识别毛色、品种与剪耳特征。
         remaining = deadline - time.monotonic()
@@ -339,7 +348,7 @@ def identify(db, body, media_dir=None):
             if candidates and media_dir is not None:
                 cand_crops = _load_candidate_crops(candidates, refs, media_dir)
                 vlm_compare = ai_vision.compare_candidates_vlm(
-                    crop, cand_crops, allow_remote=True, timeout=min(15, max(2, remaining - 1))
+                    crop, cand_crops, allow_remote=True, timeout=min(30, max(5, remaining - 1))
                 )
                 if vlm_compare and vlm_compare.get("is_cat") is False:
                     reason = vlm_compare.get("reason") or "视觉模型复核判定该画面并非猫咪，已拦截档案匹配。"
@@ -365,15 +374,15 @@ def identify(db, body, media_dir=None):
                 if vlm_compare and vlm_compare.get("verdict") == "same_cat":
                     idx = vlm_compare.get("best_candidate_index")
                     conf = float(vlm_compare.get("confidence", 0.0))
-                    if idx and 1 <= idx <= len(candidates) and conf >= 0.65:
+                    if idx and 1 <= idx <= len(candidates) and conf >= 0.55:
                         picked = candidates.pop(idx - 1)
-                        picked = dict(picked, similarity=round(max(float(picked.get("similarity", 0.0)), min(0.98, 0.55 + 0.43 * conf)), 4))
+                        picked = dict(picked, similarity=round(max(float(picked.get("similarity", 0.0)), min(0.98, 0.58 + 0.40 * conf)), 4))
                         candidates.insert(0, picked)
-                elif vlm_compare and vlm_compare.get("verdict") == "different_cat" and float(vlm_compare.get("confidence", 0.0)) >= 0.65:
+                elif vlm_compare and vlm_compare.get("verdict") == "different_cat" and float(vlm_compare.get("confidence", 0.0)) >= 0.55:
                     candidates = []
             else:
                 remote_profile = ai_vision.classify_cat_crop(
-                    crop, allow_remote=True, timeout=min(14, max(2, remaining - 1))
+                    crop, allow_remote=True, timeout=min(28, max(5, remaining - 1)), precomputed_clip=gate.get("clip_analysis")
                 )
                 if remote_profile and remote_profile.get("is_cat") is False:
                     reason = remote_profile.get("summary") or "视觉模型识别该画面并非猫咪，已拦截档案匹配。"
@@ -396,6 +405,12 @@ def identify(db, body, media_dir=None):
                     continue
                 if remote_profile:
                     ai_profile = remote_profile
+
+            # 若云端超时返回 None，兜底补充本地辅助结果避免页面空白
+            if ai_profile is None:
+                ai_profile = ai_vision.classify_cat_crop(
+                    crop, allow_remote=False, precomputed_clip=gate.get("clip_analysis")
+                )
 
         record_status = assess_db_match(
             candidates, reference_count, area=area, usable=analysis["usable"], vlm_compare=vlm_compare
@@ -428,6 +443,7 @@ def serialize(db, rows, *, private=False):
         if private:
             sighting["frame_url"] = f"/media/frame/{frame_id}.jpg"
             sighting["quality"] = analysis["warnings"]
+            sighting["coat_hint"] = analysis.get("coat_hint", "")
             if sighting["status"] == "pending" and analysis["usable"]:
                 if refs is None:
                     cats = catalog(db)

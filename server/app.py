@@ -226,7 +226,7 @@ class App:
         if path == "/api/areas":
             return known_areas(db)
         if path == "/api/app/version":
-            v_code, v_name = 9, "0.6.2"
+            v_code, v_name = 10, "0.6.3"
             manifest = HERE.parent / "mobile" / "android" / "AndroidManifest.xml"
             if manifest.is_file():
                 m_txt = manifest.read_text(encoding="utf-8")
@@ -240,7 +240,7 @@ class App:
                 "version_code": v_code,
                 "version_name": v_name,
                 "apk_url": "/downloads/CampusCats-Android.apk",
-                "notes": "升级高德精准融合定位与沈理地标校准，支持前端联网热更新与 App 内一键更新。",
+                "notes": "基于 0.6.2 融合定位与热更新，进一步升级云端主导识猫、修复暗光/长毛猫误杀、消除重复推理、优化弱网压测稳定性并统一北京时间显示。",
             }
         if path == "/api/map/config":
             return {

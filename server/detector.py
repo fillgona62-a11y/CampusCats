@@ -1,9 +1,9 @@
-"""Multi-cat ONNX detector with 80-class anti-human/anti-dog gate & Gaussian Soft-NMS.
+"""Multi-cat ONNX detector with 80-class anti-human/anti-dog gate, low-light rescue, and zero duplicate full-frame passes.
 
 Set CAMPUSCATS_DETECTOR=/srv/campuscats/models/yolov8s.onnx (or yolov8n.onnx) to enable:
-1. Multi-cat & huddled-kitten bounding box detection (Gaussian Soft-NMS + high-res tiling).
+1. Multi-cat & huddled-kitten bounding box detection (Gaussian Soft-NMS + high-res tiling + dark-cat rescue).
 2. Strict 80-class COCO comparison so humans (class 0) and dogs (class 16) are never boxed as cats (class 15).
-3. Box-level subject verification (`verify_box_is_cat`) combining YOLOv8 + optional local CLIP species gate.
+3. Fast single-pass subject verification (`verify_box_is_cat`) that never re-runs YOLO on tight sub-crops.
 """
 
 import os
@@ -11,7 +11,7 @@ import threading
 from functools import lru_cache
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageEnhance, ImageOps, ImageStat
 
 import clip_classifier
 
@@ -22,6 +22,7 @@ DOG_CLASS_ID = 16
 BEAR_CLASS_ID = 21
 TEDDY_CLASS_ID = 77
 _LOCK = threading.Lock()
+_THREAD_STATE = threading.local()
 
 
 def _discover_model_path():
@@ -168,24 +169,41 @@ def _soft_nms(boxes, scores, *, conf_thresh=0.28, iou_hard=0.72, sigma=0.40, max
     return picked
 
 
-def detect_cats(image, *, conf_thresh=0.28, iou_thresh=0.45, max_boxes=8, _raw_out=None):
-    """Detect all cats in a PIL RGB image, returning normalized [x, y, w, h] boxes."""
+def _run_full_frame_scan(image, *, conf_thresh=0.28, iou_thresh=0.45, max_boxes=8):
+    """Run full-frame YOLO detection ONCE, returning boxes plus class maxima and low-light retry if needed."""
+    empty = {"cats": [], "person_score": 0.0, "dog_score": 0.0, "cat_max": 0.0}
     eng = _engine()
     if eng is None:
-        return []
+        return empty
     import numpy as np
 
     session, in_name, out_name = eng
     rgb = image.convert("RGB")
     w, h = rgb.size
     if min(w, h) < 32:
-        return []
+        return empty
 
-    out, scale, pad_x, pad_y = _raw_out if _raw_out is not None else _infer_raw_640(rgb, np, session, in_name, out_name)
+    out, scale, pad_x, pad_y = _infer_raw_640(rgb, np, session, in_name, out_name)
     if out is None:
-        return []
+        return empty
+
+    person_score = round(float(np.max(out[:, 4 + PERSON_CLASS_ID])), 3) if out.shape[1] > 4 + PERSON_CLASS_ID else 0.0
+    dog_score = round(float(np.max(out[:, 4 + DOG_CLASS_ID])), 3) if out.shape[1] > 4 + DOG_CLASS_ID else 0.0
+    cat_max = round(float(np.max(out[:, 4 + CAT_CLASS_ID])), 3)
 
     all_boxes, all_scores = _extract_cat_anchors(out, w, h, scale, pad_x, pad_y, conf_thresh, np)
+
+    # Low-light / dark-cat rescue: gently lift shadows once when initial scan finds 0 cats in dim photos
+    if all_boxes.shape[0] == 0:
+        luma = ImageStat.Stat(rgb.convert("L")).mean[0]
+        if luma < 90.0:
+            lifted = ImageEnhance.Brightness(ImageOps.autocontrast(rgb, cutoff=1)).enhance(1.40)
+            l_out, l_scale, l_px, l_py = _infer_raw_640(lifted, np, session, in_name, out_name)
+            if l_out is not None:
+                lb, ls = _extract_cat_anchors(l_out, w, h, l_scale, l_px, l_py, max(0.24, conf_thresh - 0.04), np)
+                if lb.shape[0]:
+                    all_boxes, all_scores = lb, ls
+                    cat_max = max(cat_max, round(float(np.max(ls)), 3))
 
     # Multi-scale high-res tile assist for wide/tall multi-cat or small-cat scenes
     small_or_empty = all_boxes.shape[0] == 0 or np.any(
@@ -235,35 +253,42 @@ def detect_cats(image, *, conf_thresh=0.28, iou_thresh=0.45, max_boxes=8, _raw_o
                 "box": [round(float(bx1), 4), round(float(by1), 4), round(bw_n, 4), round(bh_n, 4)],
                 "score": round(float(sc), 3),
             })
-    # Sort left-to-right, top-to-bottom for deterministic multi-cat numbering
     detections.sort(key=lambda d: (round(d["box"][1], 1), d["box"][0]))
-    return detections
+    return {
+        "cats": detections,
+        "person_score": person_score,
+        "dog_score": dog_score,
+        "cat_max": cat_max,
+    }
+
+
+def detect_cats(image, *, conf_thresh=0.28, iou_thresh=0.45, max_boxes=8):
+    """Detect all cats in a PIL RGB image, returning normalized [x, y, w, h] boxes."""
+    scan = _run_full_frame_scan(image, conf_thresh=conf_thresh, iou_thresh=iou_thresh, max_boxes=max_boxes)
+    _THREAD_STATE.last_scan = (id(image), scan)
+    return scan["cats"]
 
 
 def inspect_image_subjects(image):
-    """Detect cats AND check if non-cat subjects (person/dog) dominate the frame."""
-    person_score = 0.0
-    dog_score = 0.0
-    raw_out = None
-    eng = _engine()
-    if eng is not None:
-        import numpy as np
-        session, in_name, out_name = eng
-        rgb = image.convert("RGB")
-        if min(rgb.size) >= 32:
-            raw_out = _infer_raw_640(rgb, np, session, in_name, out_name)
-            out = raw_out[0]
-            if out is not None and out.shape[1] > 4 + DOG_CLASS_ID:
-                person_score = round(float(np.max(out[:, 4 + PERSON_CLASS_ID])), 3)
-                dog_score = round(float(np.max(out[:, 4 + DOG_CLASS_ID])), 3)
-    cats = detect_cats(image, _raw_out=raw_out)
+    """Detect cats AND check non-cat dominance in a SINGLE full-frame YOLO pass."""
+    _THREAD_STATE.last_scan = None
+    cats = detect_cats(image)
+    last_id, last_scan = getattr(_THREAD_STATE, "last_scan", None) or (None, None)
+    _THREAD_STATE.last_scan = None
+    scan = last_scan if last_id == id(image) and isinstance(last_scan, dict) else {"person_score": 0.0, "dog_score": 0.0}
+    person_score = scan["person_score"]
+    dog_score = scan["dog_score"]
 
-    clip_res = clip_classifier.inspect_species(image) if clip_classifier.is_enabled() else None
+    clip_res = None
     non_cat = None
     if not cats:
-        if person_score >= 0.42 or (clip_res and clip_res["dominant"] == "person" and not clip_res["is_cat"]):
+        clip_res = clip_classifier.inspect_species(image) if clip_classifier.is_enabled() else None
+        # Do not falsely label a dark/close-up cat as dog/person when CLIP recognizes it as a cat
+        if clip_res and clip_res.get("is_cat"):
+            non_cat = None
+        elif person_score >= 0.42 or (clip_res and clip_res["dominant"] == "person" and not clip_res["is_cat"]):
             non_cat = "person"
-        elif dog_score >= 0.42 or (clip_res and clip_res["dominant"] == "dog" and not clip_res["is_cat"]):
+        elif dog_score >= 0.48 or (clip_res and clip_res["dominant"] == "dog" and not clip_res["is_cat"]):
             non_cat = "dog"
         elif clip_res and not clip_res["is_cat"]:
             non_cat = "other"
@@ -277,16 +302,40 @@ def inspect_image_subjects(image):
     }
 
 
-def verify_box_is_cat(image, box):
-    """Verify whether a user-supplied or full-frame box actually contains a cat.
+def _boxes_overlap(box_a, box_b):
+    ax, ay, aw, ah = map(float, box_a)
+    bx, by, bw, bh = map(float, box_b)
+    xx1 = max(ax, bx)
+    yy1 = max(ay, by)
+    xx2 = min(ax + aw, bx + bw)
+    yy2 = min(ay + ah, by + bh)
+    inter = max(0.0, xx2 - xx1) * max(0.0, yy2 - yy1)
+    if inter <= 0.0:
+        return False
+    area_a = max(1e-6, aw * ah)
+    area_b = max(1e-6, bw * bh)
+    iou = inter / (area_a + area_b - inter + 1e-6)
+    containment = inter / min(area_a, area_b)
+    return iou >= 0.25 or containment >= 0.45
 
-    Returns {"checked": bool, "is_cat": bool, "non_cat_type": str|None, "reason": str}.
-    Gracefully returns is_cat=True when neither ONNX detector nor CLIP is installed.
+
+def verify_box_is_cat(image, box, *, frame_info=None, cloud_vlm_active=False):
+    """Verify whether a box likely contains a cat without re-running YOLO on tight sub-crops.
+
+    When `cloud_vlm_active=True`, local stage only blocks unambiguous non-cats (human selfies, clear
+    scenes/dogs) and defers borderline cats (dark/longhaired/partial) to Cloud VLM.
     """
     det_on = is_enabled()
     clip_on = clip_classifier.is_enabled()
     if not det_on and not clip_on:
-        return {"checked": False, "is_cat": True, "non_cat_type": None, "reason": ""}
+        return {"checked": False, "is_cat": True, "non_cat_type": None, "reason": "", "clip_analysis": None}
+
+    if frame_info is None and det_on:
+        frame_info = _run_full_frame_scan(image)
+
+    # 1. If full-frame YOLO already detected a cat overlapping this box, accept immediately (never overrule on tight crop!)
+    if frame_info and any(_boxes_overlap(box, det["box"]) for det in frame_info.get("cats", [])):
+        return {"checked": True, "is_cat": True, "non_cat_type": None, "reason": "", "clip_analysis": None}
 
     rgb = image.convert("RGB")
     w, h = rgb.size
@@ -298,56 +347,64 @@ def verify_box_is_cat(image, box):
     y2 = min(h, int(round(min(1.0, y + bh + pad * bh) * h)))
     crop = rgb.crop((x1, y1, max(x1 + 1, x2), max(y1 + 1, y2)))
 
-    yolo_strong_cat = False
-    yolo_scores = None
-    if det_on:
-        import numpy as np
-        eng = _engine()
-        if eng is not None and min(crop.size) >= 32:
-            session, in_name, out_name = eng
-            out, _, _, _ = _infer_raw_640(crop, np, session, in_name, out_name)
-            if out is not None and out.shape[1] > 4 + DOG_CLASS_ID:
-                cat_max = float(np.max(out[:, 4 + CAT_CLASS_ID]))
-                person_max = float(np.max(out[:, 4 + PERSON_CLASS_ID]))
-                dog_max = float(np.max(out[:, 4 + DOG_CLASS_ID]))
-                yolo_scores = (cat_max, person_max, dog_max)
-                yolo_strong_cat = cat_max >= 0.48 and cat_max > person_max * 1.25 and cat_max > dog_max * 1.15
+    # 2. Run CLIP ONCE (both species gate and coat assist)
+    clip_once = clip_classifier.analyze_crop_once(crop) if clip_on else None
+    clip_sp = clip_once.get("species") if clip_once else None
 
-    clip_res = clip_classifier.inspect_species(crop) if clip_on else None
-    if clip_res is not None and not clip_res["is_cat"] and not yolo_strong_cat:
-        dom = clip_res["dominant"]
+    if clip_sp is not None:
+        if clip_sp.get("is_cat"):
+            # Never let YOLOv8n overrule a positive CLIP cat classification on dark/close-up cats
+            return {"checked": True, "is_cat": True, "non_cat_type": None, "reason": "", "clip_analysis": clip_once}
+
+        dom = clip_sp["dominant"]
         label = "人像" if dom == "person" else "犬类" if dom == "dog" else "非猫咪景物"
+        if cloud_vlm_active:
+            # When Cloud VLM is available, only block clear non-cats locally and let Cloud VLM adjudicate borderline crops
+            unambiguous = (
+                clip_sp.get("person_prob", 0.0) >= 0.40
+                or clip_sp.get("other_prob", 0.0) >= 0.45
+                or clip_sp.get("dog_prob", 0.0) >= 0.55
+                or clip_sp.get("cat_prob", 0.0) < 0.25
+            )
+            if not unambiguous:
+                return {"checked": True, "is_cat": True, "non_cat_type": None, "reason": "", "clip_analysis": clip_once}
         return {
             "checked": True,
             "is_cat": False,
             "non_cat_type": dom,
             "reason": f"画面识别为{label}，未检测到猫咪特征。",
+            "clip_analysis": clip_once,
         }
 
-    if yolo_scores is not None:
-        cat_max, person_max, dog_max = yolo_scores
-        clip_confirms_cat = bool(clip_res and clip_res.get("cat_prob", 0.0) >= 0.58)
-        if person_max >= 0.45 and cat_max < 0.25 and not clip_confirms_cat:
+    # 3. Fallback when only full-frame YOLO is enabled (CLIP unavailable)
+    if frame_info:
+        person_max = float(frame_info.get("person_score", 0.0))
+        dog_max = float(frame_info.get("dog_score", 0.0))
+        cat_max = float(frame_info.get("cat_max", 0.0))
+        if person_max >= 0.45 and cat_max < 0.22:
             return {
                 "checked": True,
                 "is_cat": False,
                 "non_cat_type": "person",
                 "reason": "画面识别为人像且未检测到猫咪，已拦截误识别。",
+                "clip_analysis": None,
             }
-        if dog_max >= 0.45 and cat_max < dog_max * 0.85 and not clip_confirms_cat:
+        if dog_max >= (0.55 if cloud_vlm_active else 0.45) and cat_max < 0.20:
             return {
                 "checked": True,
                 "is_cat": False,
                 "non_cat_type": "dog",
                 "reason": "画面识别为犬类而非猫咪，已拦截误识别。",
+                "clip_analysis": None,
             }
         is_full_frame = bw >= 0.95 and bh >= 0.95
-        if is_full_frame and cat_max < 0.20 and not clip_confirms_cat:
+        if is_full_frame and cat_max < 0.18 and not cloud_vlm_active:
             return {
                 "checked": True,
                 "is_cat": False,
                 "non_cat_type": "person" if person_max >= 0.30 else "other",
                 "reason": "未在画面中检测到猫咪（可能是人像、远景或遮挡过重）。",
+                "clip_analysis": None,
             }
 
-    return {"checked": True, "is_cat": True, "non_cat_type": None, "reason": ""}
+    return {"checked": True, "is_cat": True, "non_cat_type": None, "reason": "", "clip_analysis": clip_once}
