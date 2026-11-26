@@ -61,7 +61,7 @@ function home(data = null, unavailable = false) {
     </div>
     ${statsBlock}
     <section><div class="section-head"><h2>最近目击</h2><a href="#atlas">全部图鉴 ${icon('arrow')}</a></div>
-      ${data?.cats.length ? `<div class="gallery">${data.cats.slice(0,3).map(card).join('')}</div>` :
+      ${data?.cats.length ? `<div class="gallery${data.cats.length === 1 ? ' single' : ''}">${data.cats.slice(0,3).map(card).join('')}</div>` :
         `<div class="field-empty">${icon('cat')}<div><strong>${data ? '还没有已建档的猫' : unavailable ? '图鉴暂时连不上' : '正在读取图鉴…'}</strong>${data ? '<p>第一只猫建档后，照片就会出现在这里。</p>' : unavailable ? '<button type="button" class="link" id="retry">重新连接</button>' : ''}</div></div>`}
     </section>
     <div class="field-links cols-${shortcuts.length}">${shortcuts.map(([url,symbol,title]) => `<a href="#${url}">${icon(symbol)}<span>${title}</span>${icon('arrow')}</a>`).join('')}</div>${unavailable ? androidOriginBox() : ''}</div>`;
@@ -408,10 +408,10 @@ async function route() {
         if (version !== serial)
             return;
         if (page === 'map')
-            campusMapPage(main, result.cats, areaName => {
+            clean = await campusMapPage(main, result.cats, areaName => {
                 sessionStorage.setItem('campuscats:prefill-area', areaName);
                 location.hash = installedAndroid && !session ? 'device-capture' : 'capture';
-            });
+            }, () => version === serial);
         else if (page === 'atlas')
             atlas(result.cats);
         else

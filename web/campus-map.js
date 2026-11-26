@@ -1,4 +1,4 @@
-import { api, back, card, date, esc, head, icon } from './ui.js';
+import { api, back, card, date, esc, head, icon, notice } from './ui.js';
 
 /**
  * 沈阳理工大学（浑南校区 · 南屏中路 6 号）高德实景校园猫地图
@@ -158,13 +158,18 @@ async function loadAmap() {
             window._AMapSecurityConfig = { securityJsCode: cfg.amap_security_code };
         }
         await new Promise((resolve, reject) => {
+            document.querySelectorAll('script[data-amap-sdk]').forEach(el => el.remove());
             const s = document.createElement('script');
+            s.dataset.amapSdk = '1';
             // Always send origin Referer so AMap domain whitelist succeeds under HTTPS
             s.referrerPolicy = 'origin';
             s.src = `https://webapi.amap.com/maps?v=2.0&key=${encodeURIComponent(cfg.amap_key)}&plugin=AMap.Geocoder,AMap.Scale`;
             s.async = true;
             s.onload = resolve;
-            s.onerror = () => reject(new Error('高德地图脚本加载失败，请检查网络连接或高德控制台域名白名单。'));
+            s.onerror = () => {
+                s.remove();
+                reject(new Error('高德地图脚本加载失败，请检查网络连接或高德控制台域名白名单。'));
+            };
             document.head.appendChild(s);
         });
         if (!window.AMap) {
@@ -203,7 +208,7 @@ export async function reverseGeocodeAmap(lat, lng) {
     });
 }
 
-export async function campusMapPage(main, cats, onPickArea) {
+export async function campusMapPage(main, cats, onPickArea, isCurrent = () => true) {
     const byLandmark = Object.fromEntries(SYLU_LANDMARKS.map(lm => [lm.id, []]));
     for (const cat of cats || []) {
         const hit = matchLandmark(cat.area);
@@ -212,17 +217,19 @@ export async function campusMapPage(main, cats, onPickArea) {
 
     main.innerHTML = back('#home', '返回首页')
         + head('沈理猫地图（高德实景）', '沈阳理工大学（浑南区南屏中路 6 号）· 展示校内地标常驻猫、精确 GPS 目击落点与时空轨迹。')
-        + `<section class="surface" style="padding:14px">
-            <div class="actions" style="flex-wrap:wrap;gap:8px;margin-bottom:10px">
-              <button type="button" class="btn light" id="amap-layer-toggle">切换卫星图</button>
-              <button type="button" class="btn light" id="amap-landmarks-toggle">隐藏校内地标</button>
-              <button type="button" class="btn light" id="amap-locate">${icon('pin')}定位到我</button>
-              <select id="amap-cat-filter" aria-label="按猫查看时空轨迹" style="max-width:210px">
+        + `<section class="surface map-card">
+            <div class="map-toolbar">
+              <div class="map-toolbar-pills">
+                <button type="button" class="btn light map-tool-btn" id="amap-layer-toggle">卫星图</button>
+                <button type="button" class="btn light map-tool-btn" id="amap-landmarks-toggle">隐藏地标</button>
+                <button type="button" class="btn light map-tool-btn" id="amap-locate">${icon('pin')}定位</button>
+              </div>
+              <select id="amap-cat-filter" class="map-cat-filter" aria-label="按猫查看时空轨迹">
                 <option value="">正在加载目击点…</option>
               </select>
             </div>
-            <div id="amap-container" style="width:100%;height:460px;border-radius:12px;overflow:hidden;border:1px solid var(--border);display:flex;align-items:center;justify-content:center;background:var(--sub)">
-              <p class="hint" id="amap-loading">正在加载高德实景地图…</p>
+            <div id="amap-container" class="amap-stage">
+              <div class="amap-loading" id="amap-loading"><span class="skeleton-dot"></span><span>正在加载高德实景地图…</span></div>
             </div>
             <p class="hint" id="amap-hint" style="margin-top:8px"></p>
           </section>
@@ -247,16 +254,23 @@ export async function campusMapPage(main, cats, onPickArea) {
             api('/map/sightings').catch(() => ({ sightings: [] })),
         ]);
     } catch (err) {
+        if (!isCurrent()) return () => {};
+        const filterEl = main.querySelector('#amap-cat-filter');
+        if (filterEl) {
+            filterEl.innerHTML = '<option value="">地图暂未就绪</option>';
+            filterEl.disabled = true;
+        }
+        main.querySelectorAll('.map-tool-btn').forEach(b => { b.disabled = true; });
         const box = main.querySelector('#amap-container');
         if (box) {
-            box.innerHTML = `<div style="padding:24px;text-align:center;max-width:440px"><strong>高德实景地图暂未就绪</strong><p class="hint" style="margin:8px 0 14px">${esc(err.message || '请检查网络与高德密钥配置。')}</p><button type="button" class="btn light" id="amap-retry">重新加载地图</button></div>`;
-            box.querySelector('#amap-retry').onclick = () => campusMapPage(main, cats, onPickArea);
+            box.innerHTML = `<div class="amap-error"><strong>高德实景地图暂未就绪</strong><p class="hint">${esc(err.message || '请检查网络与高德密钥配置。')}</p><button type="button" class="btn light" id="amap-retry">重新加载地图</button></div>`;
+            box.querySelector('#amap-retry').onclick = () => campusMapPage(main, cats, onPickArea, isCurrent);
         }
-        return;
+        return () => {};
     }
 
     const container = main.querySelector('#amap-container');
-    if (!container) return;
+    if (!isCurrent() || !container || !container.isConnected) return () => {};
     container.innerHTML = '';
 
     const sightings = geoData?.sightings || [];
@@ -270,7 +284,7 @@ export async function campusMapPage(main, cats, onPickArea) {
 
     const centerGcj = wgs84ToGcj02(41.727829, 123.493886);
     const map = new AMap.Map('amap-container', {
-        zoom: 16.3,
+        zoom: window.innerWidth <= 520 ? 15.5 : 16.3,
         center: centerGcj,
         viewMode: '2D',
     });
@@ -281,8 +295,8 @@ export async function campusMapPage(main, cats, onPickArea) {
     let isSat = false;
     main.querySelector('#amap-layer-toggle').onclick = e => {
         isSat = !isSat;
-        if (isSat) { map.add([satLayer, roadNet]); e.target.textContent = '切换标准图'; }
-        else { map.remove([satLayer, roadNet]); e.target.textContent = '切换卫星图'; }
+        if (isSat) { map.add([satLayer, roadNet]); e.target.textContent = '标准图'; }
+        else { map.remove([satLayer, roadNet]); e.target.textContent = '卫星图'; }
     };
 
     const infoWindow = new AMap.InfoWindow({ offset: new AMap.Pixel(0, -28) });
@@ -327,7 +341,7 @@ export async function campusMapPage(main, cats, onPickArea) {
 
     main.querySelector('#amap-landmarks-toggle').onclick = e => {
         showLandmarks = !showLandmarks;
-        e.target.textContent = showLandmarks ? '隐藏校内地标' : '显示校内地标';
+        e.target.textContent = showLandmarks ? '隐藏地标' : '显示地标';
         renderLandmarks();
     };
 
@@ -352,7 +366,7 @@ export async function campusMapPage(main, cats, onPickArea) {
                 const link = s.cat_id ? `<a href="#cat/${Number(s.cat_id)}" style="color:#1c4d3e;font-weight:600">查看档案 →</a>` : '<span style="color:#666">待审核建档</span>';
                 const accTxt = s.location_accuracy ? ` · 精度约 ${Math.round(s.location_accuracy)}m` : '';
                 infoWindow.setContent(
-                    `<div style="min-width:190px;font-size:13px;line-height:1.5">`
+                    `<div style="min-width:190px;font-size:13px;line-height:1.5;color:#1f2e28">`
                     + `<img src="${esc(s.thumbnail_url)}" alt="${title}" style="width:100%;height:110px;object-fit:cover;border-radius:8px;margin-bottom:6px">`
                     + `<div><strong>${title}</strong>${s.coat ? ` · ${esc(s.coat)}` : ''}</div>`
                     + `<div style="color:#555">${esc(s.area || '沈理校内')}${accTxt}</div>`
@@ -388,7 +402,11 @@ export async function campusMapPage(main, cats, onPickArea) {
 
     let meMarker = null;
     main.querySelector('#amap-locate').onclick = () => {
-        if (!navigator.geolocation) return;
+        if (!navigator.geolocation) {
+            notice('当前浏览器不支持定位。');
+            return;
+        }
+        notice('正在定位当前位置…');
         navigator.geolocation.getCurrentPosition(pos => {
             const [gLng, gLat] = wgs84ToGcj02(pos.coords.latitude, pos.coords.longitude);
             map.setZoomAndCenter(17.5, [gLng, gLat]);
@@ -397,7 +415,9 @@ export async function campusMapPage(main, cats, onPickArea) {
                 center: [gLng, gLat], radius: 8, strokeColor: '#fff', strokeWeight: 2, fillColor: '#2563eb', fillOpacity: 0.9,
             });
             map.add(meMarker);
-        }, () => {}, { enableHighAccuracy: true, timeout: 8000 });
+        }, err => {
+            notice(err?.code === 1 ? '未授予位置权限，请在系统设置中开启定位。' : '定位超时或信号较弱，请稍后重试。');
+        }, { enableHighAccuracy: true, timeout: 8000 });
     };
 
     return () => {

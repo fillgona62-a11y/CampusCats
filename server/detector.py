@@ -168,7 +168,7 @@ def _soft_nms(boxes, scores, *, conf_thresh=0.28, iou_hard=0.72, sigma=0.40, max
     return picked
 
 
-def detect_cats(image, *, conf_thresh=0.28, iou_thresh=0.45, max_boxes=8):
+def detect_cats(image, *, conf_thresh=0.28, iou_thresh=0.45, max_boxes=8, _raw_out=None):
     """Detect all cats in a PIL RGB image, returning normalized [x, y, w, h] boxes."""
     eng = _engine()
     if eng is None:
@@ -181,7 +181,7 @@ def detect_cats(image, *, conf_thresh=0.28, iou_thresh=0.45, max_boxes=8):
     if min(w, h) < 32:
         return []
 
-    out, scale, pad_x, pad_y = _infer_raw_640(rgb, np, session, in_name, out_name)
+    out, scale, pad_x, pad_y = _raw_out if _raw_out is not None else _infer_raw_640(rgb, np, session, in_name, out_name)
     if out is None:
         return []
 
@@ -242,19 +242,21 @@ def detect_cats(image, *, conf_thresh=0.28, iou_thresh=0.45, max_boxes=8):
 
 def inspect_image_subjects(image):
     """Detect cats AND check if non-cat subjects (person/dog) dominate the frame."""
-    cats = detect_cats(image)
     person_score = 0.0
     dog_score = 0.0
+    raw_out = None
     eng = _engine()
     if eng is not None:
         import numpy as np
         session, in_name, out_name = eng
         rgb = image.convert("RGB")
         if min(rgb.size) >= 32:
-            out, _, _, _ = _infer_raw_640(rgb, np, session, in_name, out_name)
+            raw_out = _infer_raw_640(rgb, np, session, in_name, out_name)
+            out = raw_out[0]
             if out is not None and out.shape[1] > 4 + DOG_CLASS_ID:
                 person_score = round(float(np.max(out[:, 4 + PERSON_CLASS_ID])), 3)
                 dog_score = round(float(np.max(out[:, 4 + DOG_CLASS_ID])), 3)
+    cats = detect_cats(image, _raw_out=raw_out)
 
     clip_res = clip_classifier.inspect_species(image) if clip_classifier.is_enabled() else None
     non_cat = None
@@ -296,17 +298,8 @@ def verify_box_is_cat(image, box):
     y2 = min(h, int(round(min(1.0, y + bh + pad * bh) * h)))
     crop = rgb.crop((x1, y1, max(x1 + 1, x2), max(y1 + 1, y2)))
 
-    clip_res = clip_classifier.inspect_species(crop) if clip_on else None
-    if clip_res is not None and not clip_res["is_cat"]:
-        dom = clip_res["dominant"]
-        label = "人像" if dom == "person" else "犬类" if dom == "dog" else "非猫咪景物"
-        return {
-            "checked": True,
-            "is_cat": False,
-            "non_cat_type": dom,
-            "reason": f"画面识别为{label}，未检测到猫咪特征。",
-        }
-
+    yolo_strong_cat = False
+    yolo_scores = None
     if det_on:
         import numpy as np
         eng = _engine()
@@ -317,28 +310,44 @@ def verify_box_is_cat(image, box):
                 cat_max = float(np.max(out[:, 4 + CAT_CLASS_ID]))
                 person_max = float(np.max(out[:, 4 + PERSON_CLASS_ID]))
                 dog_max = float(np.max(out[:, 4 + DOG_CLASS_ID]))
-                clip_confirms_cat = bool(clip_res and clip_res.get("cat_prob", 0.0) >= 0.58)
-                if person_max >= 0.45 and cat_max < 0.25 and not clip_confirms_cat:
-                    return {
-                        "checked": True,
-                        "is_cat": False,
-                        "non_cat_type": "person",
-                        "reason": "画面识别为人像且未检测到猫咪，已拦截误识别。",
-                    }
-                if dog_max >= 0.45 and cat_max < dog_max * 0.85 and not clip_confirms_cat:
-                    return {
-                        "checked": True,
-                        "is_cat": False,
-                        "non_cat_type": "dog",
-                        "reason": "画面识别为犬类而非猫咪，已拦截误识别。",
-                    }
-                is_full_frame = bw >= 0.95 and bh >= 0.95
-                if is_full_frame and cat_max < 0.20 and not clip_confirms_cat:
-                    return {
-                        "checked": True,
-                        "is_cat": False,
-                        "non_cat_type": "person" if person_max >= 0.30 else "other",
-                        "reason": "未在画面中检测到猫咪（可能是人像、远景或遮挡过重）。",
-                    }
+                yolo_scores = (cat_max, person_max, dog_max)
+                yolo_strong_cat = cat_max >= 0.48 and cat_max > person_max * 1.25 and cat_max > dog_max * 1.15
+
+    clip_res = clip_classifier.inspect_species(crop) if clip_on else None
+    if clip_res is not None and not clip_res["is_cat"] and not yolo_strong_cat:
+        dom = clip_res["dominant"]
+        label = "人像" if dom == "person" else "犬类" if dom == "dog" else "非猫咪景物"
+        return {
+            "checked": True,
+            "is_cat": False,
+            "non_cat_type": dom,
+            "reason": f"画面识别为{label}，未检测到猫咪特征。",
+        }
+
+    if yolo_scores is not None:
+        cat_max, person_max, dog_max = yolo_scores
+        clip_confirms_cat = bool(clip_res and clip_res.get("cat_prob", 0.0) >= 0.58)
+        if person_max >= 0.45 and cat_max < 0.25 and not clip_confirms_cat:
+            return {
+                "checked": True,
+                "is_cat": False,
+                "non_cat_type": "person",
+                "reason": "画面识别为人像且未检测到猫咪，已拦截误识别。",
+            }
+        if dog_max >= 0.45 and cat_max < dog_max * 0.85 and not clip_confirms_cat:
+            return {
+                "checked": True,
+                "is_cat": False,
+                "non_cat_type": "dog",
+                "reason": "画面识别为犬类而非猫咪，已拦截误识别。",
+            }
+        is_full_frame = bw >= 0.95 and bh >= 0.95
+        if is_full_frame and cat_max < 0.20 and not clip_confirms_cat:
+            return {
+                "checked": True,
+                "is_cat": False,
+                "non_cat_type": "person" if person_max >= 0.30 else "other",
+                "reason": "未在画面中检测到猫咪（可能是人像、远景或遮挡过重）。",
+            }
 
     return {"checked": True, "is_cat": True, "non_cat_type": None, "reason": ""}

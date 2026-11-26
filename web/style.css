@@ -2141,3 +2141,283 @@ body {
 @media(max-width:680px) {
   .field-links.cols-5 { grid-template-columns:1fr; }
 }
+
+/* ==========================================================================
+   v0.6.1 Map Container, Mobile UI Polish & Restrained Motion System
+   ========================================================================== */
+body {
+  min-height:100dvh;
+  display:flex;
+  flex-direction:column;
+}
+main#content {
+  flex:1 0 auto;
+  animation:cc-fade-up .18s cubic-bezier(.22,1,.36,1);
+}
+.footer {
+  margin-top:auto;
+}
+
+/* Cover contrast enhancement */
+.field-cover::after {
+  background:linear-gradient(96deg, rgba(16,45,39,.94) 0%, rgba(16,45,39,.78) 58%, rgba(16,45,39,.24) 100%);
+}
+.gallery.single {
+  grid-template-columns:minmax(0, 360px);
+}
+
+/* Missing VLM verdict pill variants */
+.pill.ok {
+  background:#dff0e6;
+  color:#154a36;
+}
+.pill.warn {
+  background:#fce8e4;
+  color:#9c2c1f;
+}
+.pill.muted {
+  background:var(--sub);
+  color:var(--muted);
+}
+
+/* Gaode Map card, compact toolbar & isolated map stage */
+.map-card {
+  padding:12px;
+}
+.map-toolbar {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  flex-wrap:wrap;
+  gap:8px;
+  margin-bottom:10px;
+}
+.map-toolbar-pills {
+  display:flex;
+  align-items:center;
+  gap:6px;
+  flex-wrap:nowrap;
+  overflow-x:auto;
+  scrollbar-width:none;
+}
+.map-toolbar-pills::-webkit-scrollbar {
+  display:none;
+}
+.map-tool-btn {
+  min-height:36px;
+  padding:6px 12px;
+  font-size:13px;
+  white-space:nowrap;
+  flex:0 0 auto;
+}
+.map-cat-filter {
+  min-height:36px;
+  padding:6px 10px;
+  font-size:13px;
+  max-width:210px;
+  width:auto;
+}
+.amap-stage {
+  position:relative;
+  display:block;
+  width:100%;
+  height:440px;
+  border-radius:14px;
+  overflow:hidden;
+  border:1px solid var(--line);
+  background:var(--sub);
+  isolation:isolate;
+  z-index:0;
+}
+.amap-loading,
+.amap-error {
+  position:absolute;
+  inset:0;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+  gap:10px;
+  padding:24px;
+  text-align:center;
+  color:var(--muted);
+  font-size:14px;
+}
+.amap-error strong {
+  color:var(--ink);
+  font-size:15px;
+}
+.amap-error .hint {
+  max-width:360px;
+  margin:0;
+}
+.skeleton-dot {
+  width:10px;
+  height:10px;
+  border-radius:50%;
+  background:var(--ginger);
+  animation:cc-pulse 1.2s ease-in-out infinite;
+}
+
+/* Agent cloud-vision option row */
+.agent-cloud-bar {
+  display:flex;
+  align-items:center;
+  gap:8px;
+  padding:8px 12px;
+  margin:0;
+  border-top:1px solid var(--line);
+  background:var(--sub);
+  color:var(--muted);
+  font-size:12.5px;
+  line-height:1.35;
+  cursor:pointer;
+}
+.agent-cloud-bar[hidden] {
+  display:none;
+}
+.agent-cloud-bar input[type="checkbox"] {
+  width:16px;
+  height:16px;
+  margin:0;
+  flex:0 0 auto;
+  accent-color:var(--deep);
+}
+
+/* Tactile micro-interactions & animations */
+.btn,
+.cat-card,
+.photo-lookup,
+.home-agent-btn,
+.field-links a,
+.agent-quick button,
+#mobile a {
+  transition:transform .14s cubic-bezier(.22,1,.36,1), background-color .16s ease, border-color .16s ease, box-shadow .16s ease;
+}
+.btn:active,
+.cat-card:active,
+.photo-lookup:active,
+.home-agent-btn:active,
+.field-links a:active,
+.agent-quick button:active,
+#mobile a:active {
+  transform:scale(.97);
+}
+.agent-drawer[open] {
+  animation:cc-pop-in .2s cubic-bezier(.22,1,.36,1);
+}
+.agent-drawer::backdrop {
+  animation:cc-fade-in .18s ease;
+}
+.loading {
+  animation:cc-pulse 1.5s ease-in-out infinite;
+}
+#notice:not(:empty) {
+  animation:cc-toast-in .2s cubic-bezier(.22,1,.36,1);
+}
+
+@keyframes cc-fade-up {
+  from { opacity:0; transform:translateY(6px); }
+  to { opacity:1; transform:translateY(0); }
+}
+@keyframes cc-fade-in {
+  from { opacity:0; }
+  to { opacity:1; }
+}
+@keyframes cc-pop-in {
+  from { opacity:0; transform:translateY(10px) scale(.98); }
+  to { opacity:1; transform:translateY(0) scale(1); }
+}
+@keyframes cc-sheet-up {
+  from { opacity:0; transform:translateY(28px); }
+  to { opacity:1; transform:translateY(0); }
+}
+@keyframes cc-toast-in {
+  from { opacity:0; transform:translate(-50%, 8px); }
+  to { opacity:1; transform:translate(-50%, 0); }
+}
+@keyframes cc-pulse {
+  0%, 100% { opacity:1; }
+  50% { opacity:.45; }
+}
+
+@media(max-width:680px) {
+  h1, h2 {
+    font-family:var(--sans);
+    letter-spacing:-.01em;
+  }
+  .home-actions-row {
+    grid-template-columns:repeat(2, minmax(0, 1fr));
+    gap:10px;
+  }
+  .photo-lookup,
+  .home-agent-btn {
+    padding:12px;
+    gap:10px;
+    min-height:68px;
+  }
+  .photo-lookup > .icon:last-child,
+  .home-agent-btn > .icon:last-child {
+    display:none;
+  }
+  .photo-lookup strong,
+  .home-agent-btn strong {
+    font-size:14.5px;
+  }
+  .photo-lookup span,
+  .home-agent-btn span {
+    font-size:12px;
+  }
+  .map-toolbar {
+    flex-direction:column;
+    align-items:stretch;
+  }
+  .map-cat-filter {
+    max-width:none;
+    width:100%;
+  }
+  .amap-stage {
+    height:min(54dvh, 400px);
+  }
+  .agent-drawer {
+    inset:auto 0 0 0;
+    margin:0;
+    width:100%;
+    max-width:100%;
+    height:min(82dvh, 620px);
+    max-height:88dvh;
+    border-radius:20px 20px 0 0;
+    border-bottom:none;
+  }
+  .agent-drawer[open] {
+    animation:cc-sheet-up .22s cubic-bezier(.22,1,.36,1);
+  }
+}
+
+@media(prefers-color-scheme:dark) {
+  .pill.ok {
+    background:#1b3e31;
+    color:#a8e5c4;
+  }
+  .pill.warn {
+    background:#43201b;
+    color:#f7b4a8;
+  }
+  .pill.muted {
+    background:var(--sub);
+    color:var(--muted);
+  }
+  .agent-cloud-bar {
+    background:var(--sub);
+    color:var(--muted);
+    border-top-color:var(--line);
+  }
+}
+
+@media(prefers-reduced-motion:reduce) {
+  *, *::before, *::after {
+    animation-duration:.01ms !important;
+    animation-iteration-count:1 !important;
+    transition-duration:.01ms !important;
+  }
+}

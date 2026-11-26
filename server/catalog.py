@@ -251,7 +251,7 @@ def _coat_conflict(query_coat, cand_coat):
         ("纯白", ("纯黑", "橘猫", "玳瑁", "黑猫")),
         ("纯黑", ("纯白", "橘猫", "橘白", "三花", "白猫")),
         ("橘猫", ("纯黑", "纯白", "奶牛", "蓝猫", "蓝白", "灰白")),
-        ("奶牛", ("橘猫", "纯白", "纯黑", "玳瑁")),
+        ("奶牛", ("橘猫", "玳瑁")),
     )
     for key, incompatible in groups:
         if key in q and any(inc in c for inc in incompatible):
@@ -312,7 +312,7 @@ def identify(db, body, media_dir=None):
         ai_profile = ai_vision.classify_cat_crop(crop, allow_remote=False) if analysis["usable"] else None
 
         candidates = matched_profiles(analysis, refs, cats, limit=5, area=area)
-        if ai_profile and candidates:
+        if ai_profile and ai_profile.get("source") != "local_heuristic" and candidates:
             q_coat = ai_profile.get("coat", "")
             filtered = []
             for cand in candidates:

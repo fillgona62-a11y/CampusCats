@@ -83,7 +83,10 @@ def _load_one_engine(path):
     if isinstance(shape, (list, tuple)) and len(shape) == 4 and isinstance(shape[2], int) and 128 <= shape[2] <= 518:
         side = int(shape[2])
     output = _feature_output([result.name for result in session.get_outputs()])
-    return (lambda data, _s=session, _o=output, _n=name: _s.run([_o], {_n: data})[0]), side
+    def run_ort(data, _s=session, _o=output, _n=name):
+        return _s.run([_o], {_n: data})[0]
+    run_ort._input_side = side
+    return run_ort, side
 
 
 @lru_cache(maxsize=1)
@@ -94,7 +97,8 @@ def _engine():
 @lru_cache(maxsize=1)
 def _engines():
     if len(MODEL_PATHS) <= 1:
-        return ((_engine(), 224),)
+        fn = _engine()
+        return ((fn, getattr(fn, "_input_side", 224)),)
     return tuple(_load_one_engine(p) for p in MODEL_PATHS)
 
 

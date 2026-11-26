@@ -197,8 +197,8 @@ def rerank_with_local_features(query_crop, candidates, references, media_dir):
             item["distance"] = round(max(0.0, float(item.get("distance", 0.3)) - boost * 0.45), 5)
         elif both_clear_faces and best_inliers == 0:
             # Both crops have clear frontal cat faces but zero consistent facial landmarks -> penalize lookalike
-            item["distance"] = round(min(1.0, float(item.get("distance", 0.3)) + 0.035), 5)
-            item["similarity"] = round(max(0.0, float(item.get("similarity", 0.0)) - 0.07), 4)
+            item["distance"] = round(min(1.0, float(item.get("distance", 0.3)) + 0.018), 5)
+            item["similarity"] = round(max(0.0, float(item.get("similarity", 0.0)) - 0.035), 4)
         updated.append(item)
 
     updated.sort(key=lambda c: (-float(c.get("similarity", 0.0)), float(c.get("distance", 1.0))))

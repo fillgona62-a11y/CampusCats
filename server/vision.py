@@ -331,15 +331,20 @@ def assess_db_match(
     if isinstance(vlm_compare, dict) and vlm_compare.get("source") == "vlm":
         verdict = vlm_compare.get("verdict")
         reason = vlm_compare.get("reason") or ""
-        if verdict == "same_cat" and nearest.get("name"):
+        conf = float(vlm_compare.get("confidence", 0.0) or 0.0)
+        best_idx = vlm_compare.get("best_candidate_index")
+        if verdict == "same_cat" and conf >= 0.65 and best_idx and nearest.get("name"):
             return dict(
                 result,
                 status="possible_match",
                 summary=f"视觉复核高度疑似「{nearest['name']}」：{reason}" if reason else f"视觉复核高度疑似「{nearest['name']}」，请核对脸部与花纹。",
             )
-        if verdict == "different_cat":
+        if verdict == "different_cat" and conf >= 0.65:
             return dict(
                 result,
+                top_cat_id=None,
+                top_cat_name="",
+                area_matched=False,
                 status="no_candidate",
                 summary=f"视觉复核认为与候选猫存在差异：{reason}" if reason else "视觉复核认为可能不是库内候选猫，建议提交目击建档。",
             )

@@ -6,6 +6,7 @@ import android.content.ActivityNotFoundException;
 import android.content.ClipData;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.content.res.Configuration;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
@@ -55,12 +56,16 @@ public final class MainActivity extends Activity {
         super.onCreate(state);
         origin = resolveOrigin();
         web = new WebView(this);
-        web.setBackgroundColor(Color.rgb(247,246,238));
-        getWindow().setStatusBarColor(Color.rgb(247,246,238));
-        getWindow().setNavigationBarColor(Color.rgb(247,246,238));
-        web.setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
+        boolean night = (getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
+        int surfaceColor = night ? Color.rgb(15, 31, 27) : Color.rgb(247, 246, 238);
+        web.setBackgroundColor(surfaceColor);
+        getWindow().setStatusBarColor(surfaceColor);
+        getWindow().setNavigationBarColor(surfaceColor);
+        if (!night) {
+            web.setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
+        }
         FrameLayout screen = new FrameLayout(this);
-        screen.setBackgroundColor(Color.rgb(247,246,238));
+        screen.setBackgroundColor(surfaceColor);
         screen.addView(web);
         if (android.os.Build.VERSION.SDK_INT >= 35) {
             screen.setOnApplyWindowInsetsListener((v, insets) -> {
@@ -90,6 +95,14 @@ public final class MainActivity extends Activity {
     private boolean trusted(Uri url) {
         return url != null && "https".equals(url.getScheme()) && origin.getEncodedAuthority().equals(url.getEncodedAuthority());
     }
+    private static boolean isAmapHost(Uri url) {
+        if (url == null || !"https".equalsIgnoreCase(url.getScheme())) return false;
+        String host = url.getHost();
+        if (host == null) return false;
+        String lower = host.toLowerCase(java.util.Locale.ROOT);
+        return lower.equals("amap.com") || lower.endsWith(".amap.com")
+            || lower.equals("autonavi.com") || lower.endsWith(".autonavi.com");
+    }
     private boolean isEntry(Uri url) { return trusted(url) && ENTRY.equals(url.getPath()); }
 
     private static WebResourceResponse missing() {
@@ -101,6 +114,7 @@ public final class MainActivity extends Activity {
         }
         @Override public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
             Uri uri = request.getUrl();
+            if (!request.isForMainFrame() && isAmapHost(uri)) return null;
             String path = uri.getEncodedPath();
             if (!trusted(uri) || path == null) return missing();
             if (!request.isForMainFrame() && (path.startsWith("/api/") || path.startsWith("/media/"))) return null;
@@ -120,7 +134,7 @@ public final class MainActivity extends Activity {
                     java.util.Map<String, String> hdrs = new java.util.HashMap<>();
                     hdrs.put("Referrer-Policy", "strict-origin-when-cross-origin");
                     hdrs.put("Content-Security-Policy",
-                        "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://*.amap.com https://*.autonavi.com; worker-src 'self' blob:; child-src blob:; font-src 'self' data: https://*.amap.com https://*.autonavi.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://*.amap.com https://*.autonavi.com https://*.is.autonavi.com; media-src 'self' blob:; connect-src 'self' blob: data: https://*.amap.com https://*.autonavi.com; frame-src 'none'; object-src 'none'; base-uri 'none'");
+                        "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://*.amap.com https://*.autonavi.com https://*.is.autonavi.com; worker-src 'self' blob:; child-src blob:; font-src 'self' data: https://*.amap.com https://*.autonavi.com; style-src 'self' 'unsafe-inline' https://*.amap.com https://*.autonavi.com; img-src 'self' data: blob: https://*.amap.com https://*.autonavi.com https://*.is.autonavi.com; media-src 'self' blob:; connect-src 'self' blob: data: https://*.amap.com https://*.autonavi.com https://*.is.autonavi.com; frame-src 'none'; object-src 'none'; base-uri 'none'");
                     res.setResponseHeaders(hdrs);
                 }
                 return res;

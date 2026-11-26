@@ -79,7 +79,7 @@ export function initAgentWidget() {
           <span>已附带照片（自动框选多猫 · 查重并识别品种）</span>
           <button type="button" id="agent-photo-clear">移除</button>
         </div>
-        <label id="agent-cloud-label" class="hint" hidden><input type="checkbox" id="agent-cloud"> 使用已配置的云端视觉大模型增强品种与细节复核</label>
+        <label id="agent-cloud-label" class="agent-cloud-bar" hidden><input type="checkbox" id="agent-cloud"><span>启用云端视觉复核（增强品种与细节对比）</span></label>
         <form id="agent-form" class="agent-form">
           <input id="agent-file" type="file" accept="image/*" hidden>
           <button type="button" id="agent-pick" class="btn light" title="附带猫照片">传图</button>
@@ -129,7 +129,7 @@ export function initAgentWidget() {
         try {
             const st = await api('/agent/status');
             hasCloudVision = st.vision_mode === 'vlm';
-            cloudLabel.hidden = !hasCloudVision;
+            cloudLabel.hidden = !(hasCloudVision && pendingPhoto);
             if (st.mode === 'llm') {
                 modeEl.textContent = st.scope === 'personal' ? '我的专属助手 · 在线' : '校园图鉴智能助手 · 在线';
             } else {
@@ -169,6 +169,8 @@ export function initAgentWidget() {
     root.querySelector('#agent-photo-clear').onclick = () => {
         pendingPhoto = '';
         photoBar.hidden = true;
+        cloudLabel.hidden = true;
+        cloud.checked = false;
     };
 
     fileInput.onchange = async () => {
@@ -182,6 +184,7 @@ export function initAgentWidget() {
             pendingPhoto = ready;
             thumb.src = pendingPhoto;
             photoBar.hidden = false;
+            cloudLabel.hidden = !hasCloudVision;
             if (hasCloudVision) cloud.checked = true;
         } catch (err) {
             appendMsg('bot', err.message || '图片读取失败，请重试。');
@@ -195,6 +198,7 @@ export function initAgentWidget() {
         const photoToSend = pendingPhoto;
         const useCloud = cloud.checked;
         cloud.checked = false;
+        cloudLabel.hidden = true;
         pendingPhoto = '';
         photoBar.hidden = true;
         input.value = '';
@@ -227,6 +231,7 @@ export function initAgentWidget() {
         pendingPhoto = '';
         input.value = '';
         cloud.checked = false;
+        cloudLabel.hidden = true;
         thumb.removeAttribute('src');
         photoBar.hidden = true;
         log.innerHTML = initial;

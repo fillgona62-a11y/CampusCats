@@ -59,7 +59,7 @@ BREED_PROMPTS = [
         "a white cat with black patches on head and back",
     ]),
     ("中华田园猫（纯白/纯黑）", True, [
-        "a solid pure white domestic shorthair cat or山东狮子猫",
+        "a solid pure white domestic shorthair cat or Chinese Shandong Lion cat",
         "a solid sleek black domestic shorthair cat",
     ]),
     ("英国短毛猫", False, [
@@ -201,7 +201,7 @@ def inspect_species(crop):
 
     keys = [str(k) for k in bank["species_keys"].tolist()]
     mat = np.asarray(bank["species_vecs"], dtype=np.float32)
-    scale = float(bank.get("logit_scale", 100.0))
+    scale = min(float(bank.get("logit_scale", 35.0)), 35.0)
     probs = _softmax((mat @ vec) * scale, np)
     scores = {k: round(float(p), 4) for k, p in zip(keys, probs)}
     cat_p = scores.get("cat", 0.0)
@@ -232,7 +232,7 @@ def classify_breed_and_coat(crop):
         return None
     import numpy as np
 
-    scale = float(bank.get("logit_scale", 100.0))
+    scale = min(float(bank.get("logit_scale", 35.0)), 35.0)
     breed_keys = [str(k) for k in bank["breed_keys"].tolist()]
     breed_native = [bool(x) for x in bank["breed_native"].tolist()]
     breed_mat = np.asarray(bank["breed_vecs"], dtype=np.float32)
