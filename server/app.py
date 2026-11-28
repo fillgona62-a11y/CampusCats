@@ -7,6 +7,7 @@ import os
 import re
 import secrets
 import sqlite3
+import time
 import traceback
 from contextlib import closing
 from http import HTTPStatus
@@ -16,6 +17,7 @@ from urllib.parse import urlsplit
 from wsgiref.simple_server import WSGIServer, make_server
 
 import accounts
+import community
 import providers
 import surveys
 import agent
@@ -77,6 +79,7 @@ def delete_account(db, media_dir, uid, body):
         "JOIN frames f ON f.id=s.frame_id WHERE f.user_id=? UNION SELECT t.image FROM thumbnails t "
         "JOIN sightings s ON s.id=t.sighting_id JOIN frames f ON f.id=s.frame_id WHERE f.user_id=?", (uid,uid,uid))]
     db.execute("DELETE FROM sessions WHERE user_id=?",(uid,))
+    db.execute("DELETE FROM community_votes WHERE user_id=? AND sighting_id IN (SELECT sighting_id FROM community_topics WHERE state='poll')", (uid,))
     db.execute("DELETE FROM agent_providers WHERE owner=?", (uid,))
     db.execute("DELETE FROM spot_checks WHERE user_id=?",(uid,))
     db.execute("DELETE FROM sightings WHERE frame_id IN (SELECT id FROM frames WHERE user_id=?)",(uid,))
@@ -132,6 +135,8 @@ class App:
                             raise Problem("请求来源无效。",403)
                         data = self.post(db,path,user,env,headers)
                     elif method == "GET" and path.startswith("/api/"):
+                        if path in ("/api/community", "/api/home", "/api/me", "/api/review") or path.startswith(("/api/community/page/", "/api/cats/")):
+                            community.close_due(db)
                         db.execute("BEGIN")
                         data = self.get(db,path,user)
                     elif method in {"HEAD","GET"} and path.startswith("/media/"):
@@ -190,7 +195,10 @@ class App:
         else:
             row = one(db,"SELECT image AS file,user_id FROM frames WHERE id=?",int(identifier))
             public = False
-        if not public and (not user or (user["id"] != row["user_id"] and user["role"]!="reviewer")):
+        shared_crop = (user and kind in {"crop","thumb"} and row["status"] == "pending"
+                       and db.execute("SELECT 1 FROM community_topics WHERE sighting_id=? AND state='poll' AND closes>?",
+                                      (int(identifier), int(time.time()))).fetchone())
+        if not public and not shared_crop and (not user or (user["id"] != row["user_id"] and user["role"]!="reviewer")):
             raise Problem("照片不存在。",404)
         headers[:] = [h for h in headers if h[0] != "Cache-Control"]
         if public:
@@ -211,6 +219,11 @@ class App:
             raise Problem("照片已撤回或暂不可用。",404) from None
 
     def get(self, db, path, user):
+        if path == "/api/community":
+            return community.board(db, require(user))
+        match = re.fullmatch(r"/api/community/page/(\d{1,5})", path)
+        if match:
+            return community.board(db, require(user), int(match[1]) * 20)
         if path == "/api/agent/settings":
             uid = require(user)
             result = {"personal":providers.public(providers.saved(db, uid))}
@@ -253,7 +266,10 @@ class App:
             return {"sightings": map_sightings(db, user["id"] if user else None)}
         if path == "/api/home":
             cats = catalog(db)
-            return {"stats":stats(db,cats),"cats":list(cats.values())}
+            result = {"stats":stats(db,cats),"cats":list(cats.values())}
+            if user:
+                result["community_inbox"] = community.inbox(db, user["id"])
+            return result
         if path == "/api/me/album":
             return personal_album(db, require(user))
         receipt = re.fullmatch(r"/api/me/frames/(\d{1,18})", path)
@@ -264,10 +280,12 @@ class App:
                 return {"user":None,"sightings":[],"reunions":[]}
             uid = user["id"]
             rows = db.execute(SIGHTING_QUERY+" WHERE f.user_id=? ORDER BY f.observed_at DESC,s.id DESC",(uid,))
-            return {"user":user,"sightings":serialize(db,rows,private=True),"reunions":reunions(db,uid)}
+            return {"user":user,"sightings":serialize(db,rows,private=True),"reunions":reunions(db,uid),
+                    "badges":community.badges(db, uid),"community_inbox":community.inbox(db, uid)}
         if path == "/api/review":
             require(user,reviewer=True)
-            rows = db.execute(SIGHTING_QUERY+" WHERE s.status='pending' ORDER BY s.id")
+            rows = db.execute(SIGHTING_QUERY+" WHERE s.status='pending' AND NOT EXISTS "
+                              "(SELECT 1 FROM community_topics t WHERE t.sighting_id=s.id AND t.state='poll') ORDER BY s.id")
             aliases_to_review = db.execute("SELECT a.id,a.name,c.name AS cat_name FROM aliases a JOIN cats c "
                                            "ON c.id=a.cat_id WHERE a.status='pending' ORDER BY a.id")
             return {"sightings":serialize(db,rows,private=True),"aliases":[dict(r) for r in aliases_to_review],
@@ -335,6 +353,12 @@ class App:
             return result
         if path == "/api/sightings":
             return upload(db,self.media,uid,body)
+        match = re.fullmatch(r"/api/community/(\d{1,18})/(vote|name)", path)
+        if match:
+            sid = int(match[1])
+            if match[2] == "vote":
+                return community.cast(db, sid, uid, body.get("choice"))
+            return community.claim(db, sid, uid, body)
         match = re.fullmatch(r"/api/cats/(\d{1,18})/aliases",path)
         if match:
             return aliases(db,uid,int(match[1]),body)

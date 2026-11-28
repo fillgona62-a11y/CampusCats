@@ -75,6 +75,13 @@ function recordBadge(rs) {
     const [cls, label] = map[rs.status] || ['empty', '待比对'];
     return `<div class="record-box ${cls}"><span class="record-badge ${cls}">${label}</span><p>${esc(rs.summary || '')}</p></div>`;
 }
+function identityEstimateCard(estimate) {
+    if (!estimate?.choices?.length) return '';
+    const title = estimate.calibrated ? '模型概率分布' : '初步判定权重（待校准）';
+    return `<details><summary>${title}</summary><ul>${estimate.choices.map(choice =>
+        `<li>${esc(choice.name)} · ${Math.round(choice.weight * 100)}%</li>`).join('')}</ul></details>`;
+}
+
 function aiProfileCard(ai) {
     if (!ai) return '';
     const sourceTag = ai.source === 'vlm'
@@ -109,7 +116,9 @@ export function capturePage(main, onSuccess, {saveLocal, draft, lookupOnly = fal
     <div class="advice" id="quality" role="status"></div><button type="button" class="btn light" id="identify">${icon('search')}照片查查 · 查重与花色识别</button>
     <p id="lookup-status" role="status" class="hint"></p><div id="results" aria-live="polite"></div><div id="record-fields" ${lookupOnly ? 'hidden inert' : ''}><hr class="divider"><h2>保存这次目击</h2><label class="field"><span>校园区域</span><input name="area" list="capture-areas" required maxlength="60" placeholder="例如，图书馆（琴园环路）或 兵器博物馆 / 兵器广场"><small>优先选择已有区域名称，方便归入同一地点统计。</small></label><div class="actions" style="margin:-4px 0 10px"><button type="button" class="btn ghost" id="locate-btn">${icon('pin')}定位当前位置</button><span id="geo-status" class="hint" style="margin:0">拍照或选图时会询问位置权限以关联猫猫出现地点。</span></div><datalist id="capture-areas"></datalist>
     <label class="field"><span>目击时间</span><input type="datetime-local" name="observed" required></label>
-    <label class="field"><span>观察备注（选填）</span><textarea name="note" maxlength="800" rows="2" placeholder="例如，左前腿有一处橘色斑纹"></textarea></label><label class="hint"><input type="checkbox" name="automatic" checked> 允许自动关联已建档的猫</label><p class="hint">脸部特征充分吻合时自动记录重遇，其余目击待辨认。</p><p class="form-error" role="alert"></p><button type="submit" class="btn">${icon('book')}提交目击</button></div></form></div>`;
+    <label class="field"><span>观察备注（选填）</span><textarea name="note" maxlength="800" rows="2" placeholder="例如，左前腿有一处橘色斑纹"></textarea></label><label class="hint"><input type="checkbox" name="automatic" checked> 允许系统自动判定身份</label><p class="hint">证据充分时自动归档或建档。</p>
+    <label class="hint" id="community-option"><input type="checkbox" name="community" checked> 参加校园猫论坛辨认。身份不确定时，校内 App 账号可查看猫咪裁图并投票。</label>
+    <p class="form-error" role="alert"></p><button type="submit" class="btn">${icon('book')}提交目击</button></div></form></div>`;
     const $ = selector => main.querySelector(selector), form = $('#capture-form'), stage = $('#stage'), marks = $('#marks'), video = $('#viewfinder');
     const now = new Date();
     form.elements.observed.value = new Date(now - now.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
@@ -276,7 +285,7 @@ export function capturePage(main, onSuccess, {saveLocal, draft, lookupOnly = fal
         suggestions = Array(data.results.length).fill(null);
         $('#results').innerHTML = `<hr class="divider"><h2>查图与识别结果</h2><p>${data.reference_count ? '已比对图鉴参考照，可查看每只猫的候选档案。' : '图鉴还没有可比对的参考照。提交目击后，维护者可以为第一只猫建档。'}</p>` + data.results.map((r, i) => {
             const cats = r.candidates || [], warnings = r.warnings || r.quality || [];
-            return `<section class="sheet"><h3>猫 ${i + 1}</h3>${recordBadge(r.record_status)}${vlmCompareCard(r.vlm_compare)}${aiProfileCard(r.ai_profile)}${r.breed_hint?.label ? `<p class="advice">图鉴相似档案的品种线索（待核实） · ${esc(r.breed_hint.label)}。至少两只相似候选的档案记有该品种，仍需核对这只猫的来源。</p>` : ''}<div class="compare"><figure>${img(cropData(frame, r.box), '本次取景')}<figcaption>本次取景</figcaption></figure>${cats[0] ? `<figure id="ref-${i}">${img(cats[0].photo_url, cats[0].name)}<figcaption>${refCaption(cats[0])}</figcaption></figure>` : ''}</div>${warnings.length ? `<p class="advice">${esc(warnings.join(' '))}</p>` : ''}${cats.length ? `<label class="field"><span>对照候选参考照</span><select data-ref="${i}">${cats.map((cat, j) => `<option value="${j}">${esc(cat.name)} · ${esc(cat.coat || '花色待补')}${typeof cat.similarity === 'number' ? `（约 ${Math.round(cat.similarity * 100)}%）` : ''}</option>`).join('')}</select></label><div class="actions" ${lookupOnly || saveLocal ? 'hidden' : ''}><button type="button" class="btn light" data-pick="${i}">建议匹配当前候选</button><button type="button" class="btn ghost" data-clear="${i}">暂时认不出</button></div>` : '<p class="hint">目前没有可用候选。</p>'}<div class="actions"><button type="button" class="btn ghost" data-ask-agent="${i}">问问猫猫助手</button></div><p class="hint" id="selection-${i}" ${lookupOnly || saveLocal ? 'hidden' : ''}>提交意向 · 待辨认</p></section>`;
+            return `<section class="sheet"><h3>猫 ${i + 1}</h3>${recordBadge(r.record_status)}${identityEstimateCard(r.identity_estimate)}${vlmCompareCard(r.vlm_compare)}${aiProfileCard(r.ai_profile)}${r.breed_hint?.label ? `<p class="advice">图鉴相似档案的品种线索（待核实） · ${esc(r.breed_hint.label)}。至少两只相似候选的档案记有该品种，仍需核对这只猫的来源。</p>` : ''}<div class="compare"><figure>${img(cropData(frame, r.box), '本次取景')}<figcaption>本次取景</figcaption></figure>${cats[0] ? `<figure id="ref-${i}">${img(cats[0].photo_url, cats[0].name)}<figcaption>${refCaption(cats[0])}</figcaption></figure>` : ''}</div>${warnings.length ? `<p class="advice">${esc(warnings.join(' '))}</p>` : ''}${cats.length ? `<label class="field"><span>对照候选参考照</span><select data-ref="${i}">${cats.map((cat, j) => `<option value="${j}">${esc(cat.name)} · ${esc(cat.coat || '花色待补')}${typeof cat.similarity === 'number' ? `（约 ${Math.round(cat.similarity * 100)}%）` : ''}</option>`).join('')}</select></label><div class="actions" ${lookupOnly || saveLocal ? 'hidden' : ''}><button type="button" class="btn light" data-pick="${i}">建议匹配当前候选</button><button type="button" class="btn ghost" data-clear="${i}">暂时认不出</button></div>` : '<p class="hint">目前没有可用候选。</p>'}<div class="actions"><button type="button" class="btn ghost" data-ask-agent="${i}">问问猫猫助手</button></div><p class="hint" id="selection-${i}" ${lookupOnly || saveLocal ? 'hidden' : ''}>提交意向 · 待辨认</p></section>`;
         }).join('');
         $('#results').querySelectorAll('[data-ref]').forEach(select => select.onchange = () => {
             const index = Number(select.dataset.ref), cat = data.results[index].candidates[Number(select.value)];
@@ -395,6 +404,7 @@ export function capturePage(main, onSuccess, {saveLocal, draft, lookupOnly = fal
     if (saveLocal) {
         form.elements.automatic.closest('label').hidden = true;
         form.elements.automatic.closest('label').nextElementSibling.hidden = true;
+        $('#community-option').hidden = true;
         form.querySelector('[type=submit]').textContent = '保存到本机';
         $('#shutter').textContent = '拍下照片';
     }
@@ -556,11 +566,12 @@ export function capturePage(main, onSuccess, {saveLocal, draft, lookupOnly = fal
             const payload = {
                 photo, boxes: targets(), area: form.elements.area.value.trim(), note: form.elements.note.value.trim(), request_id: requestId, observed_at: observed.toISOString(),
                 suggested_cat_ids: targets().map((_, i) => suggestions[i] ?? null),
+                ...(!saveLocal && form.elements.community.checked ? {community: true} : {}),
                 automatic: form.elements.automatic.checked && !reviewedForSighting,
                 ...(gps ? { latitude: gps.latitude, longitude: gps.longitude, location_accuracy: gps.location_accuracy } : {})
             };
             if (reviewedForSighting) payload.reviewed_photo = true;
-            if (cloudDecisions && payload.automatic) {
+            if (!payload.community && cloudDecisions && payload.automatic) {
                 payload.automatic = cloudDecisions.every((id, i) => id && (!suggestions[i] || suggestions[i] === id))
                     && new Set(cloudDecisions).size === cloudDecisions.length;
                 if (payload.automatic) payload.suggested_cat_ids = cloudDecisions;

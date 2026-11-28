@@ -70,6 +70,25 @@ CREATE TABLE IF NOT EXISTS sightings (
 );
 CREATE INDEX IF NOT EXISTS sightings_by_cat ON sightings(cat_id);
 CREATE INDEX IF NOT EXISTS sightings_by_status ON sightings(status);
+CREATE TABLE IF NOT EXISTS community_topics (
+    sighting_id INTEGER PRIMARY KEY REFERENCES sightings ON DELETE CASCADE,
+    state TEXT NOT NULL CHECK(state IN ('poll','closed','private_name','public_name','named','cancelled')),
+    cat_id INTEGER REFERENCES cats ON DELETE SET NULL,
+    named_by INTEGER REFERENCES users ON DELETE SET NULL,
+    closes INTEGER,
+    options TEXT NOT NULL,
+    distribution TEXT NOT NULL,
+    calibrated INTEGER NOT NULL CHECK(calibrated IN (0,1)),
+    result TEXT
+);
+CREATE INDEX IF NOT EXISTS community_topics_deadline ON community_topics(closes) WHERE state='poll';
+CREATE TABLE IF NOT EXISTS community_votes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sighting_id INTEGER NOT NULL REFERENCES community_topics ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users ON DELETE CASCADE,
+    choice TEXT NOT NULL,
+    UNIQUE(sighting_id,user_id)
+);
 CREATE INDEX IF NOT EXISTS frames_by_owner ON frames(user_id,observed_at);
 CREATE TABLE IF NOT EXISTS spot_checks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

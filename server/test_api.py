@@ -37,7 +37,7 @@ class CatalogFlow(unittest.TestCase):
         def start(status, headers):
             reply.update(code=int(status[:3]),headers=dict(headers))
         result = b"".join(self.app(env,start))
-        self.assertEqual(reply["code"],expected,(path,result[:500]))
+        self.assertIn(reply["code"], expected if isinstance(expected, tuple) else (expected,), (path,result[:500]))
         body = json.loads(result) if "json" in reply["headers"]["Content-Type"] else result
         return body,reply["headers"]
 
@@ -58,6 +58,56 @@ class CatalogFlow(unittest.TestCase):
         time = (datetime.now(timezone.utc)-timedelta(days=days_ago)).isoformat()
         return {"request_id":key,"photo":photo,"area":"教学区","note":"观察记录","boxes":boxes or [[0,0,1,1]],
                 "observed_at":time}
+
+    def test_community_voting_cutoff_and_first_public_name(self):
+        topic = self.call("/api/sightings", dict(self.submit(self.photo(), "forum-upload"), community=True), self.member)[0]["community"][0]
+        sid = topic["sighting_id"]
+        self.assertEqual(topic["state"], "poll")
+        self.call("/api/community", expected=401)
+        self.assertEqual(self.call("/api/me", cookie=self.reviewer)[0]["community_inbox"], 1)
+        self.call(f"/media/crop/{sid}.jpg", expected=404)
+        self.call(f"/media/crop/{sid}.jpg", cookie=self.reviewer)
+        vote = f"/api/community/{sid}/vote"
+        self.call(vote, {"choice":"new"}, self.member)
+        self.call(vote, {"choice":"unclear"}, self.member, 409)
+        self.call(vote, {"choice":"new"}, self.reviewer)
+        third = self.register("third@example.edu")
+        self.call(vote, {"choice":"unclear"}, third)
+        with closing(connect(self.app.db_path)) as db, db:
+            db.execute("UPDATE community_topics SET closes=0 WHERE sighting_id=?", (sid,))
+        self.call(vote, {"choice":"new"}, self.reviewer, 409)
+        result = self.call("/api/community", cookie=self.member)[0]["topics"][0]
+        self.assertEqual((result["state"], result["result"]), ("public_name", "new"))
+        self.assertEqual(sum(o["votes"] for o in result["options"]), 3)
+        self.assertEqual(self.call("/api/me", cookie=self.reviewer)[0]["community_inbox"], 1)
+        name = f"/api/community/{sid}/name"
+        def claim(attempt):
+            cookie, proposed = attempt
+            return cookie, self.call(name, {"name":proposed}, cookie, (200, 409))[0]
+        with ThreadPoolExecutor(2) as pool:
+            attempts = list(pool.map(claim, [(self.reviewer,"春卷"),(self.member,"栗子")]))
+        winners = [(cookie, body["name"]) for cookie, body in attempts if "name" in body]
+        self.assertEqual(len(winners), 1)
+        winner, chosen = winners[0]
+        self.assertEqual(self.call("/api/home")[0]["cats"][0]["name"], chosen)
+        self.assertIn("校园寻猫员", {b["title"] for b in self.call("/api/me", cookie=self.member)[0]["badges"]})
+        self.assertIn("猫名题签", {b["title"] for b in self.call("/api/me", cookie=winner)[0]["badges"]})
+
+    def test_model_new_cat_reserves_naming_for_discoverer(self):
+        for i in range(3):
+            payload = self.submit(self.photo(i), "seed-"+str(i))
+            sid = self.call("/api/sightings", payload, self.member)[0]["sightings"][0]["id"]
+            self.call(f"/api/review/{sid}", {"action":"new","name":f"旧猫{i}","reason":"测试种子"}, self.reviewer)
+        def distant(analysis, refs, **options):
+            return [{"cat_id":1,"distance":.82}] if options.get("limit") == 3 else []
+        with patch("community.calibration", return_value=(.3, 20, .04)), patch("community.rank_candidates", side_effect=distant), patch("cat_face.has_frontal_face", return_value=True):
+            topic = self.call("/api/sightings", dict(self.submit(self.photo(6), "discovery"), community=True), self.member)[0]["community"][0]
+        self.assertEqual(topic["state"], "private_name")
+        sid = topic["sighting_id"]
+        self.assertFalse(self.call("/api/community", cookie=self.reviewer)[0]["topics"])
+        self.call(f"/api/community/{sid}/name", {"name":"抢名"}, self.reviewer, 403)
+        self.call(f"/api/community/{sid}/name", {"name":"琴园"}, self.member)
+        self.assertIn("琴园", {c["name"] for c in self.call("/api/home")[0]["cats"]})
 
     def test_cold_start_review_repeat_and_reunion(self):
         photo = self.photo()

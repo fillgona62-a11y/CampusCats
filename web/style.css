@@ -2448,3 +2448,15 @@ main#content {
   padding:5px 12px;
   font-size:13px;
 }
+.community-topic .community-photo { display:block; width:min(100%,360px); max-height:320px; object-fit:contain; border-radius:12px; margin:12px 0; background:var(--sub); }
+.community-topic fieldset { padding:0; margin:14px 0; border:0; }
+.community-topic legend { margin-bottom:8px; font-weight:650; }
+.community-option { display:flex; min-height:48px; margin:6px 0; align-items:center; gap:10px; padding:6px 10px; border:1px solid var(--line); border-radius:10px; cursor:pointer; }
+.community-option img { width:44px; height:44px; object-fit:cover; border-radius:6px; }
+.community-option:has(:checked) { outline:2px solid var(--deep); outline-offset:-2px; }
+.community-topic details { margin-top:12px; }
+.community-pages { margin-top:12px; }
+.community-badges { list-style:none; padding:0; display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:10px; }
+.community-badges li { display:flex; align-items:center; gap:10px; border:1px solid var(--line); border-radius:12px; padding:10px; }
+.community-badges p { margin:2px 0 0; font-size:13px; color:var(--muted); }
+.badge-mark { display:grid; place-items:center; flex:none; width:36px; height:36px; border-radius:50%; background:var(--deep); color:white; }

@@ -150,7 +150,15 @@ def main():
                         help="Skip unreferenced media modified within this many seconds (default: 3600)")
     parser.add_argument("--apply", action="store_true", help="Perform deletions or reindex writes instead of dry-run")
     parser.add_argument("--reindex-vision", action="store_true", help="Recompute stored sighting features for current vision model")
+    parser.add_argument("--settle-community", action="store_true", help="Settle expired identity polls")
     args = parser.parse_args()
+    if args.settle_community:
+        if not args.apply:
+            parser.error("--settle-community requires --apply")
+        from community import close_due
+        with closing(connect(Path(args.data_dir) / "campus.sqlite3")) as db:
+            close_due(db)
+        return
     if args.reindex_vision:
         rep = reindex_vision(args.data_dir, args.media_dir, apply=args.apply)
         mode = "APPLIED" if rep["applied"] else "DRY-RUN"

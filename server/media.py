@@ -12,7 +12,6 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 
 from vision import analyze_crop, pixel_box
 from face_match import face_features
-import ai_vision
 
 
 class Problem(Exception):
@@ -90,6 +89,8 @@ def canonical_photo(photo):
 
 
 def prepare(photo, boxes, *, verify=False):
+    import ai_vision
+
     frame,image = canonical_photo(photo)
     media = {media_name(frame): frame}
     crops = []

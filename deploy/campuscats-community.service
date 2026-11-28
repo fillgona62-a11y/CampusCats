@@ -1,0 +1,11 @@
+[Unit]
+Description=Settle expired Campus Cats identity polls
+After=campuscats.service
+
+[Service]
+Type=oneshot
+User=campuscats
+WorkingDirectory=/srv/campuscats/current
+ExecStart=/srv/campuscats/vision-venv/bin/python -B server/maintenance.py --data-dir /var/lib/campuscats --settle-community --apply
+NoNewPrivileges=yes
+UMask=0027

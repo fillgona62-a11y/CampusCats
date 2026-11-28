@@ -331,6 +331,8 @@ def _review_digest(photo, boxes):
 
 
 def identify(db, body, media_dir=None, *, reviewer_uid=None):
+    import community
+
     mode = body.get("box_mode", "manual")
     boxes = validate_boxes(body.get("boxes")) if mode == "manual" else []
     if mode not in ("manual", "auto", "cloud_review"):
@@ -371,6 +373,7 @@ def identify(db, body, media_dir=None, *, reviewer_uid=None):
     refs = references(db)
     db.commit()
     reference_count = len({r[0] for r in refs})
+    confidence_config = community.calibration()
 
     def identify_one(box):
         gate = detector.verify_box_is_cat(
@@ -504,6 +507,8 @@ def identify(db, body, media_dir=None, *, reviewer_uid=None):
         if cloud_vlm_ready and candidates and not vlm_compare and analysis["usable"]:
             record_status.update(status="ambiguous", top_cat_id=None, top_cat_name="", area_matched=False,
                                  summary="云端未完成身份比对，可以先查看候选参考照。")
+        ranked = rank_candidates(analysis, refs, limit=3, max_distance=1.0)
+        scores = community.distribution(ranked, confidence_config)
         return {
             "box": box,
             "quality": analysis["warnings"],
@@ -515,6 +520,14 @@ def identify(db, body, media_dir=None, *, reviewer_uid=None):
             "record_status": record_status,
             "ai_profile": ai_profile,
             "vlm_compare": vlm_compare,
+            "identity_estimate": {
+                "calibrated": confidence_config is not None,
+                "choices": [
+                    {"name": cats.get(int(key), {}).get("name", "已有档案") if key.isdecimal() else
+                     "新猫" if key == community.NEW else "证据不足", "weight": weight}
+                    for key, weight in scores.items()
+                ],
+            },
         }
     results = _identify_boxes(boxes, identify_one, cloud_vlm_ready)
     response = {"results": results, "reference_count": reference_count}
@@ -561,6 +574,10 @@ def serialize(db, rows, *, private=False):
 
 
 def upload(db, media_dir, uid, body):
+    import community
+
+    publish_to_forum = body.get("community") is True
+    confidence_config = community.calibration() if publish_to_forum else None
     key = field(body, "request_id", 80, required=True)
     if not re.fullmatch(r"[A-Za-z0-9_-]+", key):
         raise Problem("提交编号无效，请重试。")
@@ -606,6 +623,8 @@ def upload(db, media_dir, uid, body):
     fingerprint_fields = [body.get("photo"), boxes, area, note, observed, suggestions]
     if not automatic:
         fingerprint_fields.append(False)
+    if publish_to_forum:
+        fingerprint_fields.append("community")
     fingerprint = hashlib.sha256(json.dumps(fingerprint_fields, separators=(",", ":")).encode()).hexdigest()
 
     def previous():
@@ -626,6 +645,11 @@ def upload(db, media_dir, uid, body):
             one(db, "SELECT 1 FROM sightings WHERE cat_id=? AND status='confirmed'", cat_id)
         ref_revision = revision(db) if automatic else None
         refs = references(db) if automatic else []
+        if refs:
+            machine_only = {r[0] for r in db.execute(
+                "SELECT sighting_id FROM community_topics WHERE closes IS NULL AND result='new'"
+            )}
+            refs = [(cid, ref) for cid, ref in refs if ref["_reference_id"] not in machine_only]
         reference_days = defaultdict(set)
         for cat_id, ref in refs:
             if ref["day"]:
@@ -647,7 +671,10 @@ def upload(db, media_dir, uid, body):
             matches = []
             for _, _, _, analysis, features in targets:
                 ranked = rank_candidates(analysis, refs, limit=7) if features is not None else []
-                matches.append(automatic_match(features, ranked, refs, media_dir))
+                match = automatic_match(features, ranked, refs, media_dir)
+                if match and not community.allows_match(analysis, refs, match[0], confidence_config):
+                    match = None
+                matches.append(match)
             proposed = Counter(match[0] for match in matches if match)
             # Persist immutable content-addressed blobs before taking SQLite's global writer lock.
             created = save_media(media_dir, media)
@@ -669,6 +696,7 @@ def upload(db, media_dir, uid, body):
                         record = db.execute("INSERT INTO sightings(frame_id,box,crop,analysis,suggested_cat_id) "
                                             "VALUES(?,?,?,?,?)",(frame_id,json.dumps(box),crop,json.dumps(analysis),suggestion))
                         db.execute("INSERT INTO thumbnails(sighting_id,image) VALUES(?,?)",(record.lastrowid,thumb))
+                        linked = False
                         if match:
                             cat_id, first_reference, second_reference = match
                             other_suggestions = suggestions[:index] + suggestions[index+1:]
@@ -679,6 +707,10 @@ def upload(db, media_dir, uid, body):
                                 db.execute("INSERT INTO auto_identity VALUES(?,?,?)",
                                            (sighting_id, first_reference, second_reference))
                                 audit(db, uid, "identity_auto", sighting_id, None, list(match), "两天人工参考照的脸部特征一致")
+                                linked = True
+                        if publish_to_forum and not linked:
+                            community.publish(db, record.lastrowid, uid, analysis, references(db),
+                                              confidence_config, automatic, suggestion)
                 db.commit()
             except BaseException:
                 db.rollback()
@@ -695,7 +727,13 @@ def upload(db, media_dir, uid, body):
                     db.commit()
                 raise
     rows = db.execute(SIGHTING_QUERY + " WHERE f.id=? ORDER BY s.id", (frame_id,))
-    return {"sightings": serialize(db, rows, private=True)}
+    reply = {"sightings": serialize(db, rows, private=True)}
+    if publish_to_forum:
+        reply["community"] = [dict(row) for row in db.execute("""
+            SELECT t.sighting_id,t.state FROM community_topics t JOIN sightings s ON s.id=t.sighting_id
+            WHERE s.frame_id=? ORDER BY s.id
+        """, (frame_id,))]
+    return reply
 
 
 def revision(db):
@@ -755,6 +793,8 @@ def review_identity(db, actor, sid, body):
         else:
             raise Problem("无效的审核操作。")
     db.execute("UPDATE sightings SET status=?,cat_id=? WHERE id=?", (status, cat_id, sid))
+    db.execute("""UPDATE community_topics SET state='cancelled',cat_id=NULL,result=NULL
+                  WHERE sighting_id=? AND state!='closed'""", (sid,))
     db.execute("DELETE FROM auto_identity WHERE sighting_id=?", (sid,))
     audit(db, actor, "identity", sid, [row["status"],row["cat_id"]], [status,cat_id], reason)
     return {"id": sid, "status": status, "cat_id": cat_id}
