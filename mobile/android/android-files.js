@@ -24,6 +24,6 @@ document.addEventListener('click', event => {
 document.addEventListener('contextmenu', event => {
     if (event.target instanceof HTMLImageElement && event.target.src.startsWith('data:image/png;')) {
         event.preventDefault();
-        save(event.target.src, '猫迹-卡片.png');
+        save(event.target.src, '琴园有猫-卡片.png');
     }
 });

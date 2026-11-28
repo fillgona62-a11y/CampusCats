@@ -8,7 +8,7 @@
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
-    <application android:label="猫迹" android:icon="@drawable/cat_icon"
+    <application android:label="琴园有猫" android:icon="@drawable/cat_icon"
         android:theme="@android:style/Theme.Material.Light.NoActionBar" android:allowBackup="false">
         <provider android:name=".CaptureFile" android:authorities="campus.cats.capture" android:exported="false" android:grantUriPermissions="true" />
         <activity android:name=".MainActivity" android:configChanges="keyboardHidden|orientation|screenSize|screenLayout" android:exported="true">

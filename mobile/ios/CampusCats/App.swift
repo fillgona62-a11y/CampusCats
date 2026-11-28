@@ -24,7 +24,7 @@ private struct ServerView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("猫迹").font(.system(size: 50, weight: .bold, design: .serif)).foregroundColor(green)
+            Text("琴园有猫").font(.system(size: 50, weight: .bold, design: .serif)).foregroundColor(green)
             Text("连接学校的猫图鉴").font(.title2)
             TextField("学校提供的 HTTPS 地址", text: $address)
                 .keyboardType(.URL).textInputAutocapitalization(.never)

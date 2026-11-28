@@ -244,7 +244,7 @@ function catPage({ cat, sightings }, allCats = []) {
 function auth(mode, requested = 'me') {
     const target = /^(home|atlas|map|agent-settings|capture(?:\/\d{1,16})?|community(?:\/\d{1,5})?|me|review|album|surveys|cat\/\d{1,18}|encounter\/\d{1,18}(?:\/\d{1,18})?)$/.test(requested) ? requested : 'me';
     const create = mode === 'register', recover = mode === 'recover';
-    const title = recover ? '找回密码' : create ? '创建观察账号' : '登录猫迹';
+    const title = recover ? '找回密码' : create ? '创建观察账号' : '登录琴园有猫';
     main.innerHTML = `<div class="tiny">${back('#home', '返回首页')}${head(title, create ? '注册后可以提交目击，收集自己的重遇卡片。' : '')}<form class="surface" id="auth">${recover ? '' : `<div class="seg"><a class="${!create ? 'active' : ''}" href="#login/${target}">登录</a><a class="${create ? 'active' : ''}" href="#register/${target}">注册</a></div>`}
  <label class="field"><span>邮箱</span><input name="email" required type="email" autocomplete="email" maxlength="254"></label>
  ${create ? '<label class="field"><span>昵称</span><input name="nickname" required maxlength="32" autocomplete="nickname"></label>' : ''}
@@ -314,10 +314,10 @@ async function saveReunion(r, element) {
     }
     c.fillStyle = '#526a60';
     c.font = '21px ' + fonts;
-    c.fillText('猫迹 · 校园猫图鉴', 35, 755);
+    c.fillText('琴园有猫 · 校园猫图鉴', 35, 755);
     const url = canvas.toDataURL('image/png');
     element.innerHTML = img(url, '可长按保存的重遇卡片', 'style="width:100%;height:auto;aspect-ratio:auto"') +
-        `<div class="actions" style="margin-top:8px"><a class="link" href="${url}" download="猫迹-重遇卡-${Number(r.cat_id)}.png">下载重遇卡</a><span class="hint">也可长按或右键保存卡片。</span></div>`;
+        `<div class="actions" style="margin-top:8px"><a class="link" href="${url}" download="琴园有猫-重遇卡-${Number(r.cat_id)}.png">下载重遇卡</a><span class="hint">也可长按或右键保存卡片。</span></div>`;
 }
 function me(data) {
     const { user, sightings, reunions } = data;

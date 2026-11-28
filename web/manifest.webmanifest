@@ -1,5 +1,5 @@
 {
-  "id": "/", "name": "猫迹 · 校园猫图鉴", "short_name": "猫迹", "lang": "zh-CN",
+  "id": "/", "name": "琴园有猫 · 校园猫图鉴", "short_name": "琴园有猫", "lang": "zh-CN",
   "start_url": "/", "scope": "/", "display": "standalone",
   "background_color": "#f6f4eb", "theme_color": "#173d35",
   "icons": [

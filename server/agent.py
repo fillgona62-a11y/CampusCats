@@ -30,7 +30,7 @@ _MAX_LLM_CONCURRENCY = max(1, min(int(os.getenv("CAMPUSCATS_LLM_CONCURRENCY", "3
 _LLM_SLOTS = threading.BoundedSemaphore(_MAX_LLM_CONCURRENCY)
 
 SYSTEM_PROMPT = (
-    "你是「猫迹 · 沈阳理工大学校园猫图鉴」的智能校园猫管家。你可以调用工具查询数据库中的校园猫档案、"
+    "你是「琴园有猫 · 沈阳理工大学校园猫图鉴」的智能校园猫管家。你可以调用工具查询数据库中的校园猫档案、"
     "统计校园猫分布、查看最近目击记录，并对用户上传的照片执行自动多猫检测、人像/非猫过滤、在库查重与品种/花色识别。\n"
     "回答原则：\n"
     "1. 严格基于工具返回的真实数据库与识别结果回答，绝不编造不存在的猫档案或目击记录。\n"

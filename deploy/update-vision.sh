@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 更新已采用 /srv/campuscats/current 发布目录和 systemd 的猫迹业务机。
+# 更新已采用 /srv/campuscats/current 发布目录和 systemd 的琴园有猫业务机。
 set -euo pipefail
 
 base=/srv/campuscats

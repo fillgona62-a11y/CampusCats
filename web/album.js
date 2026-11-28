@@ -84,10 +84,10 @@ async function renderSouvenir(sighting, frame, element) {
     ctx.fillRect(0, 845, 800, 85);
     ctx.fillStyle = '#fffdf3';
     ctx.font = '25px "PingFang SC","Microsoft YaHei",sans-serif';
-    ctx.fillText('猫迹 · 校园猫图鉴', 36, 897);
+    ctx.fillText('琴园有猫 · 校园猫图鉴', 36, 897);
     const url = canvas.toDataURL('image/png');
     element.innerHTML = img(url, '可长按保存的相遇卡', 'class="souvenir-image"') +
-        `<a class="link" href="${url}" download="猫迹-相遇卡-${Number(sighting.id)}.png">下载相遇卡</a><span class="hint">也可长按图片保存</span>`;
+        `<a class="link" href="${url}" download="琴园有猫-相遇卡-${Number(sighting.id)}.png">下载相遇卡</a><span class="hint">也可长按图片保存</span>`;
 }
 
 export function encounterPage(main, frame, selectedId) {

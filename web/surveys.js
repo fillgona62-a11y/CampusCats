@@ -37,7 +37,7 @@ function downloadReport(data) {
     const url = URL.createObjectURL(new Blob(['\uFEFF',csv],{type:'text/csv;charset=utf-8'}));
     const link = document.createElement('a');
     link.href = url;
-    link.download = '猫迹-校园观察-' + data.week_start + '.csv';
+    link.download = '琴园有猫-校园观察-' + data.week_start + '.csv';
     document.body.append(link);
     link.click();
     link.remove();
